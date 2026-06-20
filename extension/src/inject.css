@@ -1,0 +1,192 @@
+/* Custom Hover Translate — 注入页面样式
+ *
+ * 配色原则(对齐沉浸式翻译):
+ *   - 译文颜色/字号/行高 inherit 自原文所在容器,自动适配亮/暗页面,
+ *     不再硬编码 #1a1a1a(否则在暗色页面上不可见)。
+ *   - 不设独立的不透明背景框;只用淡色左边线 + 极淡背景区分译文,
+ *     在任何页面底色上都可辨。
+ *   - prefers-color-scheme 仅微调边线色相,不负责主文字色(交给继承)。
+ */
+
+/* 双语对照模式:译文块(追加在原文块内部末尾) */
+.ct-target {
+  display: block;
+  margin: 4px 0 2px;
+  padding: 2px 8px;
+  border-left: 3px solid #4a8eff;
+  /* 关键:不写 color,继承父级(原文容器),亮页面=深字、暗页面=浅字 */
+  font-size: inherit;
+  line-height: inherit;
+  border-radius: 2px;
+  word-wrap: break-word;
+  /* 极淡背景:用 currentColor 的一点点透明度,任何底色上都柔和可见 */
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+.ct-target.ct-pending {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, #4a8eff 4%, transparent),
+    color-mix(in srgb, #4a8eff 18%, transparent),
+    color-mix(in srgb, #4a8eff 4%, transparent)
+  );
+  background-size: 200% 100%;
+  animation: ct-shimmer 1.2s linear infinite;
+  min-height: 1.2em;
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.ct-target.ct-error {
+  border-left-color: #e44;
+  background: color-mix(in srgb, #e44 8%, transparent);
+}
+
+.ct-target.ct-error button {
+  margin-left: 8px;
+  font-size: 0.85em;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid #e44;
+  color: #e44;
+  border-radius: 3px;
+  padding: 2px 8px;
+}
+
+.ct-target.ct-error button:hover {
+  background: color-mix(in srgb, #e44 12%, transparent);
+}
+
+/* showOriginal 时显示的原文缩略(双语对照里通常关掉) */
+.ct-original {
+  font-size: 0.82em;
+  opacity: 0.6;
+  margin-bottom: 4px;
+  font-style: italic;
+}
+
+.ct-translation {
+  white-space: pre-wrap;
+}
+
+/* 仅译文模式:整块被替换,译文直接顶替原文,无任何边框(完全融入页面)。
+   可选:用极淡下划虚线标记"这是译文",鼠标悬停可看原文 data-ct-original。 */
+.ct-replaced {
+  /* 不设 color/font/背景,完全继承 */
+  cursor: help;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: color-mix(in srgb, currentColor 30%, transparent);
+  text-underline-offset: 3px;
+}
+
+@keyframes ct-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* 系统暗色模式:仅微调边线亮度,主文字色仍继承 */
+@media (prefers-color-scheme: dark) {
+  .ct-target {
+    border-left-color: #6aa6ff;
+  }
+}
+
+/* ============ 右键翻译气泡(沉浸式风格:鼠标位置原位浮窗) ============ */
+.ct-toast {
+  position: fixed;
+  z-index: 2147483647;
+  min-width: 240px;
+  max-width: 480px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: #1f2937;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  pointer-events: auto;
+  user-select: none;
+  animation: ct-toast-in 0.12s ease-out;
+}
+@keyframes ct-toast-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.ct-toast-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: #6b7280;
+  letter-spacing: 0.3px;
+}
+.ct-toast-title {
+  font-weight: 600;
+  color: #2563eb;
+}
+.ct-toast-close {
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 3px;
+  user-select: none;
+}
+.ct-toast-close:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+.ct-toast-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #6b7280;
+}
+.ct-toast-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(37, 99, 235, 0.2);
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: ct-spin 0.8s linear infinite;
+}
+@keyframes ct-spin {
+  to { transform: rotate(360deg); }
+}
+.ct-toast-original {
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 4px;
+  font-size: 12px;
+  color: #6b7280;
+  max-height: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre-wrap;
+}
+.ct-toast-result {
+  padding: 4px 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: #1f2937;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ct-toast-error {
+  color: #b91c1c;
+  font-size: 13px;
+}
+@media (prefers-color-scheme: dark) {
+  .ct-toast {
+    color: #f3f4f6;
+    background: rgba(31, 41, 55, 0.98);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+  .ct-toast-original {
+    background: rgba(255, 255, 255, 0.04);
+    color: #9ca3af;
+  }
+  .ct-toast-result { color: #f3f4f6; }
+  .ct-toast-title { color: #60a5fa; }
+  .ct-toast-header { color: #9ca3af; }
+}
+}

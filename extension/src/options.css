@@ -1,0 +1,61 @@
+body {
+  max-width: 720px;
+  margin: 24px auto;
+  padding: 0 20px 40px;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  color: #1a1a1a;
+}
+
+h1 { font-size: 20px; margin: 0 0 8px; }
+.lead { color: #555; margin: 0 0 16px; line-height: 1.6; }
+
+fieldset {
+  border: 1px solid #d8dde6;
+  border-radius: 6px;
+  padding: 12px 16px 14px;
+  margin: 0 0 14px;
+  background: #fafbfc;
+}
+legend { font-weight: 700; padding: 0 6px; }
+
+label {
+  display: block;
+  margin: 8px 0;
+  font-weight: 600;
+}
+label.check { font-weight: 500; }
+label input, label select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+  margin-top: 4px;
+  background: #fff;
+}
+label.check input { display: inline-block; width: auto; margin-right: 6px; vertical-align: middle; }
+
+.hint { color: #777; font-size: 12px; margin: 4px 0 0; font-weight: 400; }
+code { background: #eef1f5; padding: 1px 4px; border-radius: 3px; font-size: 12.5px; }
+
+.actions {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+button {
+  padding: 7px 14px;
+  border: 1px solid #4a8eff;
+  background: #fff;
+  color: #1a1a1a;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+button:hover { background: #f0f6ff; }
+button.primary { background: #4a8eff; color: #fff; }
+#msg { margin-left: auto; }

@@ -1,0 +1,271 @@
+body {
+  width: 360px;
+  margin: 0;
+  padding: 12px 14px;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  color: #1a1a1a;
+  background: #fafbfc;
+}
+
+header h1 {
+  font-size: 15px;
+  margin: 0 0 2px;
+}
+header .sub {
+  font-size: 11px;
+  color: #888;
+  margin: 0 0 12px;
+}
+
+/* ============ Hero 区(主打功能) ============ */
+.hero {
+  background: linear-gradient(135deg, #f0f6ff, #e8f4ff);
+  border: 1px solid #b8d4ff;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.hero-btn {
+  width: 100%;
+  padding: 12px 14px;
+  background: #4a8eff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: background .15s, transform .05s;
+}
+.hero-btn:hover { background: #3a7eef; }
+.hero-btn:active { transform: translateY(1px); }
+.hero-btn:disabled { background: #aaa; cursor: not-allowed; }
+.hero-btn.alt {
+  margin-top: 6px;
+  background: #2bb673;
+}
+.hero-btn.alt:hover { background: #259a62; }
+.hero-btn.alt:disabled { background: #aaa; }
+
+.hero-secondary {
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 10px;
+  background: transparent;
+  color: #4a8eff;
+  border: 1px solid #4a8eff;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.hero-secondary:hover { background: #f0f6ff; }
+.hero-secondary:disabled { color: #aaa; border-color: #aaa; cursor: not-allowed; }
+.hero-secondary.toggle {
+  border-style: dashed;
+  color: #2563eb;
+}
+
+.hero-status {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #555;
+  min-height: 1.4em;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* ============ status ============ */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #e2e6ee;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+.led {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #ccc; flex-shrink: 0;
+  transition: background .2s;
+}
+.led.ok { background: #2c8a2c; box-shadow: 0 0 6px rgba(44,138,44,0.5); }
+.led.err { background: #e44; box-shadow: 0 0 6px rgba(228,68,68,0.5); }
+.status-text { flex: 1; min-width: 0; }
+.status-text #status-line { font-weight: 600; }
+.muted { color: #888; font-size: 11px; }
+
+/* ============ fallback 链 ============ */
+.fallback {
+  background: #fff;
+  border: 1px solid #e2e6ee;
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.fb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.fb-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #444;
+}
+.fb-chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+.fb-chip {
+  padding: 3px 8px;
+  background: #f0f1f4;
+  border: 1px solid #d8dde6;
+  border-radius: 12px;
+  color: #555;
+  font-weight: 500;
+}
+.fb-chip.active {
+  background: #4a8eff;
+  border-color: #4a8eff;
+  color: #fff;
+  font-weight: 700;
+}
+.fb-chip.disabled { opacity: 0.4; }
+.fb-buttons {
+  display: flex;
+  gap: 6px;
+}
+.fb-btn {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid #4a8eff;
+  background: #fff;
+  color: #4a8eff;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.fb-btn.primary {
+  background: #4a8eff;
+  color: #fff;
+}
+.fb-btn:hover { background: #f0f6ff; }
+.fb-btn.primary:hover { background: #3a7eef; }
+.fb-last {
+  margin-top: 6px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  min-height: 1.2em;
+  word-break: break-all;
+}
+
+/* 复用全局 switch 样式(.switch / .slider)— 与 popup 内其他 toggle 一致 */
+.fallback .switch { display: inline-flex; align-items: center; cursor: pointer; }
+.fallback .switch input { display: none; }
+.fallback .switch .slider {
+  width: 32px; height: 18px;
+  background: #ccc; border-radius: 9px;
+  position: relative; transition: background .15s;
+}
+.fallback .switch .slider::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; transition: transform .15s;
+}
+.fallback .switch input:checked + .slider { background: #4a8eff; }
+.fallback .switch input:checked + .slider::after { transform: translateX(14px); }
+
+/* ============ form ============ */
+.row { margin: 8px 0; }
+.row.buttons { display: flex; gap: 8px; }
+.row.buttons.small button { font-size: 11px; padding: 5px 6px; }
+.row label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 12px; }
+
+select, input[type=text] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+  background: #fff;
+}
+
+button {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #4a8eff;
+  background: #fff;
+  color: #1a1a1a;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+button:hover { background: #f0f6ff; }
+button:disabled { color: #aaa; border-color: #aaa; cursor: not-allowed; }
+
+footer {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #eee;
+  font-size: 11px;
+}
+
+/* ============ 外部工具跳转按钮(翻译 PDF/文档 → pdftranslator.org) ============ */
+.external-tool {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e5e7eb;
+}
+.external-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  color: #4b5563;
+  border: 1px dashed #9ca3af;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background .15s, border-color .15s;
+}
+.external-btn:hover {
+  background: #f9fafb;
+  border-color: #4b5563;
+  color: #111827;
+}
+.external-btn:active {
+  background: #f3f4f6;
+}
+.ext-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.ext-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.ext-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: #1f2937;
+}
+.ext-sub {
+  font-size: 10px;
+  color: #6b7280;
+}

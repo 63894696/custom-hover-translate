@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Custom Hover Translate — 设置</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <h1>Custom Hover Translate — 设置</h1>
+  <p class="lead">所有设置保存在 <code>chrome.storage.local</code>。后端优先,.env 默认值即可工作;这里只是临时覆盖。</p>
+
+  <fieldset>
+    <legend>后端连接</legend>
+    <label>Endpoint URL
+      <input type="text" id="endpoint" placeholder="http://127.0.0.1:12308" />
+    </label>
+    <p class="hint">默认 <code>http://127.0.0.1:12308</code>(与 backend/.env 中 PORT 一致)。</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Provider / Model / API Key(可选覆盖)</legend>
+    <label>Provider
+      <select id="provider">
+        <option value="">(不覆盖,走后端默认)</option>
+        <option value="minimax">MiniMax (MiniMax-M3)</option>
+        <option value="deepseek">DeepSeek (deepseek-chat)</option>
+        <option value="openai">OpenAI (gpt-4o-mini)</option>
+        <option value="qwen-mt">Qwen MT (qwen-mt)</option>
+        <option value="ollama">Ollama (本机,无需 key)</option>
+        <option value="custom">Custom</option>
+      </select>
+    </label>
+    <label>Model(留空用 provider 默认)
+      <input type="text" id="model" placeholder="例如 gpt-4o-mini" />
+    </label>
+    <label>API Key(留空用后端 .env 或本地 Ollama)
+      <input type="password" id="apiKey" placeholder="sk-...(Google Translate gtx / Ollama 无需 key)" autocomplete="off" />
+    </label>
+    <label>API Base URL(仅 custom 模式用,留空走后端默认)
+      <input type="text" id="baseURL" placeholder="https://api.openai.com/v1" />
+    </label>
+    <p class="hint">保存时同步调后端 <code>/select-provider</code>。Key 存 <code>chrome.storage.local</code>(仅本机可见)。</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>自动翻译(全局)</legend>
+    <p class="hint">点 popup 里的 <strong>「整页双语对照」</strong> 或 <strong>「整页仅译文」</strong> 按钮,即可启用全局跟踪翻译(新页面、FAQ 展开、SPA 路由变化自动跟进)。再点 <strong>「切换」</strong> 按钮可一键在双语/仅译文间切换。无需在此页面配置。</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>翻译行为</legend>
+    <label>目标语言(目前 zh 是唯一模板;选其他会拼到 prompt 提示词)
+      <select id="dstLang">
+        <option value="zh">中文(zh)</option>
+        <option value="en">英文(en)</option>
+        <option value="ja">日文(ja)</option>
+        <option value="ko">韩文(ko)</option>
+        <option value="fr">法文(fr)</option>
+        <option value="de">德文(de)</option>
+      </select>
+    </label>
+    <label>段落最小字符数(小于则不翻译)
+      <input type="number" id="minChars" min="4" max="200" value="12" />
+    </label>
+    <label>段落最大字符数(超过则截断)
+      <input type="number" id="maxChars" min="200" max="8000" value="1500" />
+    </label>
+    <label>缓存 TTL 小时
+      <input type="number" id="ttlHours" min="1" max="720" value="24" />
+    </label>
+    <label class="check">
+      <input type="checkbox" id="showOriginal" />
+      译文上方同时显示原文小字(默认关)
+    </label>
+  </fieldset>
+
+  <div class="actions">
+    <button id="save" class="primary">保存</button>
+    <button id="reset">恢复默认</button>
+    <span id="msg" class="hint"></span>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

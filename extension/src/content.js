@@ -377,13 +377,13 @@
       }
       return false;
     }
-    // 大容器选取策略(P1c 覆盖率修复,2026-08-11):
-    //   旧策略"bilingual 下独立块<5 才补 priority 2"会让聊天留言板(.gb-message 这类
-    //   含 inline 元数据 span 的多文本容器被判 priority 2)在内容多的页面永不入选 → 整片漏翻。
-    //   新策略:bilingual 下 priority 2 的【叶子型容器】(无块级子元素,如一条留言/一条评论,
-    //   只含 inline span)正常入选,译文附加在块尾(appendBilingual)不顶替不破结构;
-    //   含块级子元素的大容器(SECTION/MAIN 等)仍排除(译文会塞错位置)。
-    //   replace 模式下 priority 2 永不入选(整块顶替会抹平容器子结构)——不变。
+    // 大容器选取策略(P1c 覆盖率修复 + #18 replace 对齐,2026-08-11):
+    //   priority 2 的【叶子型容器】(无块级子元素,如一条留言 .gb-message / 一条评论,只含
+    //   inline span)在【bilingual 和 replace 下都入选】:它不含块级子,replace 整块顶替
+    //   不会抹平子结构(有 setMainTextBlock 的 hasBlockLevelChild 双保险兜底,含块级子仍拒替)。
+    //   含块级子元素的大容器(SECTION/MAIN 等)两模式都排除(译文会塞错位置/破框架)。
+    //   —— replace 下一刀切排除 priority 2 是 #14 改默认 replace 后 .gb-message 留言
+    //      整片(215 条)漏翻的根因:它们 priority 2 但无块级子,本该可替。
     const BLOCK_LEVEL = new Set(['P','LI','DIV','SECTION','ARTICLE','UL','OL','TABLE','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','PRE','HEADER','FOOTER','NAV','ASIDE','FIGURE','FORM','DL','DD','DT']);
     function hasBlockChild(el) {
       for (const ch of el.children) { if (BLOCK_LEVEL.has(ch.tagName)) return true; }
@@ -393,8 +393,8 @@
       if (chosen.has(c.n) || blocked.has(c.n)) continue;
       if (isInsideChosen(c.n)) { blocked.add(c.n); continue; }
       if (c.priority === 2) {
-        // replace 永不选;bilingual 只选叶子型容器(无块级子),大容器排除
-        if (mode === 'replace' || hasBlockChild(c.n)) { blocked.add(c.n); continue; }
+        // 两模式都只排除"含块级子的大容器";叶子型容器(无块级子)bilingual/replace 都入选
+        if (hasBlockChild(c.n)) { blocked.add(c.n); continue; }
       }
       // 选中它:占用它的整个子树(后代不再单独选),并阻断祖先链
       // (子块先选后,容器祖先若再被选会"吃掉"子块 → 子块双重翻译/被顶替)

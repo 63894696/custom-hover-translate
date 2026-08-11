@@ -54,6 +54,7 @@ async function checkStatus() {
     }
     if (d && d.needConfig) {
       setLed('warn', '● 需配置', d.hint || '当前网络连不上内置翻译');
+      // B 步:除「去配置」外,附一条模型选型引导(链 babelspan models.html)
       setStatusAction({
         label: '去配置',
         onClick: () => {
@@ -64,6 +65,14 @@ async function checkStatus() {
           $('baseURL').focus();
         },
       });
+      if (d.guideUrl) {
+        const a = document.createElement('a');
+        a.href = d.guideUrl;
+        a.textContent = d.guideText || '模型怎么选 →';
+        a.className = 'guide-link';
+        a.addEventListener('click', (e) => { e.preventDefault(); chrome.tabs.create({ url: d.guideUrl }); });
+        $('status-action').appendChild(a);
+      }
       return { ok: false };
     }
     setLed('err', '● 未就绪', (d && d.hint) || (resp && resp.error) || '请检查网络');
@@ -143,12 +152,29 @@ $('dstLang').addEventListener('change', async (e) => {
 });
 
 // ---------- 三档:高级设置 ----------
+// D 步:填充角色下拉(来自 prompts.js 预设表)
+function fillRoleSelect(sel) {
+  const roles = (self.CT_PROMPTS && self.CT_PROMPTS.ROLES) || [];
+  sel.innerHTML = '';
+  roles.forEach((ro) => {
+    const o = document.createElement('option');
+    o.value = ro.id;
+    o.textContent = ro.name;
+    sel.appendChild(o);
+  });
+}
+function updateRoleDesc() {
+  const role = self.CT_PROMPTS && self.CT_PROMPTS.getRole ? self.CT_PROMPTS.getRole($('promptRole').value) : null;
+  $('role-desc').textContent = role ? role.desc + '。' : '';
+}
+
 function toggleAdvGroups() {
   const eng = document.querySelector('input[name="engine"]:checked')?.value || 'auto';
   $('custom-config').style.display = eng === 'openai_compat' ? '' : 'none';
   $('backend-config').style.display = eng === 'local_backend' ? '' : 'none';
 }
 document.querySelectorAll('input[name="engine"]').forEach((r) => r.addEventListener('change', toggleAdvGroups));
+document.addEventListener('change', (e) => { if (e.target && e.target.id === 'promptRole') updateRoleDesc(); });
 
 $('save-adv').addEventListener('click', async () => {
   const engine = document.querySelector('input[name="engine"]:checked')?.value || 'auto';
@@ -162,6 +188,10 @@ $('save-adv').addEventListener('click', async () => {
   if (model) payload.model = model;
   if (apiKey) payload.apiKey = apiKey;
   if (endpoint) payload.endpoint = endpoint;
+  // D 步:角色 + 温度(仅自定义端点有意义,但存着无害)
+  payload.promptRole = $('promptRole').value || 'general';
+  const t = parseFloat($('temperature').value);
+  payload.temperature = isNaN(t) ? 0.2 : Math.max(0, Math.min(2, t));
   await chrome.storage.local.set(payload);
   $('adv-msg').textContent = '已保存';
   setTimeout(() => { $('adv-msg').textContent = ''; }, 3000);
@@ -212,10 +242,10 @@ $('fetch-models').addEventListener('click', async () => {
   }
 });
 
-// 评测科普页链接(占位 URL,落地后替换)
+// 模型选型页(babelspan 内容站,已上线)
 $('open-leaderboard').addEventListener('click', (e) => {
   e.preventDefault();
-  chrome.tabs.create({ url: 'https://prisir.example.com/translate-models' }); // TODO: 替换为真实评测页
+  chrome.tabs.create({ url: 'https://www.babelspan.com/models.html' });
 });
 
 $('open-options').addEventListener('click', () => chrome.runtime.openOptionsPage());
@@ -229,7 +259,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 // ---------- 初始化 ----------
 document.addEventListener('DOMContentLoaded', async () => {
   CT_LANGS.fillLangSelect($('dstLang'));
-  const s = await chrome.storage.local.get(['dstLang', 'engine', 'activeMode', 'baseURL', 'model', 'apiKey', 'endpoint']);
+  const s = await chrome.storage.local.get(['dstLang', 'engine', 'activeMode', 'baseURL', 'model', 'apiKey', 'endpoint', 'promptRole', 'temperature']);
   // 未设过目标语言 → 按系统语言推断(仅写 UI,不落盘;落盘由 onInstalled 或用户选择触发)
   $('dstLang').value = s.dstLang || CT_LANGS.guessTargetLang();
   const eng = s.engine || 'auto';
@@ -242,6 +272,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('model').value = s.model || '';
   $('apiKey').value = s.apiKey || '';
   $('endpoint').value = s.endpoint || '';
+  // D 步:角色 + 温度
+  fillRoleSelect($('promptRole'));
+  $('promptRole').value = s.promptRole || 'general';
+  updateRoleDesc();
+  $('temperature').value = (s.temperature != null) ? s.temperature : 0.2;
   toggleAdvGroups();
   await checkStatus();
 });

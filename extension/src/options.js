@@ -6,6 +6,7 @@ async function load() {
   const s = await chrome.storage.local.get([
     'engine', 'baseURL', 'model', 'apiKey', 'endpoint',
     'dstLang', 'minChars', 'maxChars', 'ttlHours', 'showOriginal',
+    'promptRole', 'termsText', 'temperature', 'concurrency',
   ]);
   const eng = s.engine || 'auto';
   const r = document.querySelector(`input[name="engine"][value="${eng}"]`);
@@ -20,15 +21,43 @@ async function load() {
   $('maxChars').value = s.maxChars || 1500;
   $('ttlHours').value = s.ttlHours || 24;
   $('showOriginal').checked = !!s.showOriginal;
+  // D 步:角色 / 术语 / 温度 / 并发
+  fillRoleSelect($('promptRole'));
+  $('promptRole').value = s.promptRole || 'general';
+  updateRoleDesc();
+  $('termsText').value = s.termsText || '';
+  $('temperature').value = (s.temperature != null) ? s.temperature : 0.2;
+  $('concurrency').value = s.concurrency || 6;
   toggleFieldsets();
+}
+
+// 填充角色下拉(来自 prompts.js 的预设表)
+function fillRoleSelect(sel) {
+  const roles = (self.CT_PROMPTS && self.CT_PROMPTS.ROLES) || [];
+  sel.innerHTML = '';
+  roles.forEach((ro) => {
+    const o = document.createElement('option');
+    o.value = ro.id;
+    o.textContent = ro.name;
+    sel.appendChild(o);
+  });
+}
+function updateRoleDesc() {
+  const role = self.CT_PROMPTS && self.CT_PROMPTS.getRole ? self.CT_PROMPTS.getRole($('promptRole').value) : null;
+  $('role-desc').textContent = role
+    ? `${role.desc}。同一台模型,换个角色得到面向不同场景的译文(google_gtx 内置翻译无此概念)。`
+    : '同一台模型,换个角色得到面向不同场景的译文。';
 }
 
 function toggleFieldsets() {
   const eng = document.querySelector('input[name="engine"]:checked')?.value || 'auto';
-  $('custom-fieldset').style.display = eng === 'openai_compat' ? '' : 'none';
+  const isCustom = eng === 'openai_compat';
+  $('custom-fieldset').style.display = isCustom ? '' : 'none';
+  $('role-fieldset').style.display = isCustom ? '' : 'none';
   $('backend-fieldset').style.display = eng === 'local_backend' ? '' : 'none';
 }
 document.querySelectorAll('input[name="engine"]').forEach((r) => r.addEventListener('change', toggleFieldsets));
+document.addEventListener('change', (e) => { if (e.target && e.target.id === 'promptRole') updateRoleDesc(); });
 
 async function save() {
   const engine = document.querySelector('input[name="engine"]:checked')?.value || 'auto';
@@ -39,6 +68,10 @@ async function save() {
     maxChars: parseInt($('maxChars').value, 10) || 1500,
     ttlHours: parseInt($('ttlHours').value, 10) || 24,
     showOriginal: $('showOriginal').checked,
+    promptRole: $('promptRole').value || 'general',
+    termsText: $('termsText').value,
+    temperature: Math.max(0, Math.min(2, parseFloat($('temperature').value) || 0)),
+    concurrency: Math.max(1, Math.min(20, parseInt($('concurrency').value, 10) || 6)),
   };
   // 端点/key 仅非空时存(避免空串覆盖)
   const baseURL = $('baseURL').value.trim();
@@ -118,3 +151,38 @@ document.getElementById('fetch-models').addEventListener('click', async () => {
 });
 
 document.addEventListener('DOMContentLoaded', load);
+
+// D 步:测试服务 — 用当前表单里填的(未保存也行)端点+Key+模型发一条 "Hello",
+// 显示"✓ 模型 · 耗时"或具体错误,帮用户确认配置配对。
+document.getElementById('test-service').addEventListener('click', async () => {
+  const btn = $('test-service');
+  const out = $('test-service-result');
+  const baseURL = $('baseURL').value.trim();
+  const apiKey = $('apiKey').value.trim();
+  const model = $('model').value.trim();
+  if (!baseURL || !model) {
+    out.textContent = '请先填 API Base URL 和模型名。';
+    out.style.color = '#c0392b';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '测试中…';
+  out.textContent = '';
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'test-service', baseURL, apiKey, model });
+    if (resp && resp.ok) {
+      out.textContent = `✓ 通了 · ${resp.model} · ${resp.durationMs}ms${resp.sample ? ` · 回包:${resp.sample}` : ''}`;
+      out.style.color = '#1e8449';
+    } else {
+      out.textContent = `✗ ${(resp && resp.error) || '失败'}${resp && resp.httpStatus ? ` (HTTP ${resp.httpStatus})` : ''}`;
+      out.style.color = '#c0392b';
+    }
+  } catch (e) {
+    out.textContent = `✗ 通信失败:${(e && e.message) || e}`;
+    out.style.color = '#c0392b';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '测试服务';
+    setTimeout(() => { out.textContent = ''; }, 8000);
+  }
+});

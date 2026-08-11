@@ -339,14 +339,25 @@
       }
       return false;
     }
-    // 大容器 fallback:bilingual 下先跑完 priority 0/1,选出的"独立块"少于 5 个才补 priority 2;
-    // replace 模式下 priority 2 永不入选(整块顶替会抹平容器子结构)。
+    // 大容器选取策略(P1c 覆盖率修复,2026-08-11):
+    //   旧策略"bilingual 下独立块<5 才补 priority 2"会让聊天留言板(.gb-message 这类
+    //   含 inline 元数据 span 的多文本容器被判 priority 2)在内容多的页面永不入选 → 整片漏翻。
+    //   新策略:bilingual 下 priority 2 的【叶子型容器】(无块级子元素,如一条留言/一条评论,
+    //   只含 inline span)正常入选,译文附加在块尾(appendBilingual)不顶替不破结构;
+    //   含块级子元素的大容器(SECTION/MAIN 等)仍排除(译文会塞错位置)。
+    //   replace 模式下 priority 2 永不入选(整块顶替会抹平容器子结构)——不变。
+    const BLOCK_LEVEL = new Set(['P','LI','DIV','SECTION','ARTICLE','UL','OL','TABLE','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','PRE','HEADER','FOOTER','NAV','ASIDE','FIGURE','FORM','DL','DD','DT']);
+    function hasBlockChild(el) {
+      for (const ch of el.children) { if (BLOCK_LEVEL.has(ch.tagName)) return true; }
+      return false;
+    }
     let usedNonBig = 0;
     for (const c of candidates) {
       if (chosen.has(c.n) || blocked.has(c.n)) continue;
       if (isInsideChosen(c.n)) { blocked.add(c.n); continue; }
       if (c.priority === 2) {
-        if (mode === 'replace' || usedNonBig >= 5) { blocked.add(c.n); continue; }
+        // replace 永不选;bilingual 只选叶子型容器(无块级子),大容器排除
+        if (mode === 'replace' || hasBlockChild(c.n)) { blocked.add(c.n); continue; }
       } else {
         usedNonBig++;
       }

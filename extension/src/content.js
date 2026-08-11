@@ -179,10 +179,11 @@
   // 内部真正的 <p> 被判"嵌套"跳过 → 译文塞进 SECTION 级容器(另一个区域),且只翻到标题。
   // 新策略:先收集所有候选 → 按优先级排序(叶子优先)→ 若某节点的子树已选了更小的块,则丢弃它。
   //
-  // mode 说明(P0 修复,2026-08-11):
-  //   'bilingual'(默认):priority 2 多文本容器在叶子块不足时可整块入选(译文只是附加在块尾,不破坏结构)。
-  //   'replace':priority 2 多文本容器【永不入选】——仅译文模式会清空块内全部文本节点再顶替,
-  //             若选容器会把导航/导语的分栏子结构抹平挤成一坨(用户截图1)。replace 只逐叶子块各替各的。
+  // mode 说明(#18 修正,2026-08-11):
+  //   两模式一致:priority 2 的【叶子型容器】(无块级子)都入选;含块级子的大容器都排除。
+  //   旧注释"replace 永不入选 priority 2"已废弃——那是 #14 改默认 replace 后 .gb-message
+  //   留言整片漏翻的根因。replace 安全性由 setMainTextBlock 的 hasBlockLevelChild 兜底。
+  //   (mode 参数当前已无消费点,保留以兼容调用方签名。)
   function scanAllBlocks({ minChars = 4, maxChars = 1500, mode = 'bilingual' } = {}) {
     const out = [];
     // 优先级:真正的段落标签 = 1(最想要);通用容器 div/span/section = 2(退而求其次)
@@ -384,7 +385,7 @@
     //   含块级子元素的大容器(SECTION/MAIN 等)两模式都排除(译文会塞错位置/破框架)。
     //   —— replace 下一刀切排除 priority 2 是 #14 改默认 replace 后 .gb-message 留言
     //      整片(215 条)漏翻的根因:它们 priority 2 但无块级子,本该可替。
-    const BLOCK_LEVEL = new Set(['P','LI','DIV','SECTION','ARTICLE','UL','OL','TABLE','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','PRE','HEADER','FOOTER','NAV','ASIDE','FIGURE','FORM','DL','DD','DT']);
+    const BLOCK_LEVEL = new Set(['P','LI','DIV','SECTION','ARTICLE','UL','OL','TABLE','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','PRE','HEADER','FOOTER','NAV','ASIDE','FIGURE','FORM','DL','DD','DT','MAIN','DETAILS','DIALOG','FIELDSET','ADDRESS']);
     function hasBlockChild(el) {
       for (const ch of el.children) { if (BLOCK_LEVEL.has(ch.tagName)) return true; }
       return false;
@@ -683,10 +684,12 @@
   // 全部置空后在块首注入译文。这样跨内联标签的整段一起被译文顶替,不再残留英文片段。
   // restoreBlock 逐个把保存的原文写回,结构上 100% 还原。
   //
-  // 兜底(P0):块内若含块级子元素(P/LI/H1-6/DIV/SECTION/ARTICLE/UL/OL/TABLE 等),
+  // 兜底(P0):块内若含块级子元素(P/LI/H1-6/DIV/SECTION/ARTICLE/UL/OL/TABLE/MAIN/DETAILS 等),
   // 说明它是"容器"而非"叶子段"——整块顶替会抹平子结构。扫描器已在 replace 模式拦掉
   // priority-2 容器,这里是双保险:此类块直接跳过(不替)。
-  const BLOCK_CHILD_TAGS = new Set(['P','LI','DIV','SECTION','ARTICLE','UL','OL','TABLE','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','PRE','HEADER','FOOTER','NAV','ASIDE','FIGURE','FORM','DL']);
+  // (#18 reviewer:与扫描器 BLOCK_LEVEL 同步补 MAIN/DETAILS/DIALOG/FIELDSET/ADDRESS,
+  //  消除"含这些直接子的容器穿过两道防护被整块顶替"的破口。)
+  const BLOCK_CHILD_TAGS = new Set(['P','LI','DIV','SECTION','ARTICLE','UL','OL','TABLE','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','PRE','HEADER','FOOTER','NAV','ASIDE','FIGURE','FORM','DL','DD','DT','MAIN','DETAILS','DIALOG','FIELDSET','ADDRESS']);
   function hasBlockLevelChild(block) {
     for (const el of block.children) {
       if (BLOCK_CHILD_TAGS.has(el.tagName)) return true;

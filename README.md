@@ -61,6 +61,62 @@ npm start
 - 翻译进度气泡底部小字显示当前生效的 provider / 耗时 / fallback 链
 - Google Translate gtx 是默认首选(2-3s/条,无需 key),断开 VPN 时会失败 → 自动跳到下一档
 
+---
+
+## ✨ AI 翻译增强(v2026.08,自定义端点专属)
+
+当你选用 **自定义端点(OpenAI 兼容)** 时,解锁以下能力。这些只在 `engine = openai_compat` 时生效 —— Google gtx / 本地后端没有提示词概念。
+
+### 🎭 12 种 AI 角色提示词(`promptRole`)
+
+同一台模型,换个"角色"得到面向不同场景的译文。在 **popup → 高级设置** 或 **options → 翻译策略** 里切换:
+
+| 角色 | 适用场景 | 支持 %% 批量 |
+|---|---|---|
+| 通用 general | 日常网页 | ✅ |
+| 润色 polish | 提升行文质感(先直译再润) | ❌(逐条) |
+| 意译大师 | 重表达轻字面对应 | ✅ |
+| 学术 academic | 论文 / 研究报告 | ✅ |
+| 技术 tech | 文档 / API / 代码注释 | ✅ |
+| 新闻 news | 媒体报道 | ✅ |
+| Reddit / Twitter / GitHub | 对应社区语气 | ✅ |
+| 小说 fiction | 文学作品 | ✅ |
+| 游戏 game | 游戏文本 | ✅ |
+| 电商 ecommerce | 商品描述 | ✅ |
+| 中英混排 zh-en-mix | 保留专有名词英文 | ✅ |
+
+实现见 [extension/src/prompts.js](extension/src/prompts.js)。`buildPrompt()` 注入 `{{to}}` / `{{text}}` / `{{terms_prompt}}` 占位符。
+
+### 📖 术语表(`termsText`)
+
+options → 翻译策略 → 术语表,一行一条 `原文=译文`:
+
+```
+Babelspan=通天尺规
+rubric=尺规
+```
+
+翻译时自动以"术语约束"注入提示词,保证专有名词一致。
+
+### 🌡️ 温度 / 并发(`temperature` / `concurrency`)
+
+- **温度** 0–2,默认 0.2。越小越稳定(直译场景),调大可增加多样性(意译 / 文学)。
+- **并发** 1–20,默认 6。控制 `%%` 批量协议的并发请求数。
+
+### ⚡ `%%` 批量协议(`engineTranslateBatch`)
+
+整页翻译时,**同语言同角色的多条文本**合并成**一次** chat completion(用 `\n%%\n` 分隔),模型原样回分隔,再切回单条。省 token、降延迟。若切分条数对不上,自动回退逐条翻译,**不丢数据**。仅 `batchOK: true` 的角色启用。
+
+### 🔌 测试服务按钮
+
+options / popup 里填好 Base URL + Key + Model 后,点 **测试服务** 发一条 "Hello",即时显示 `✓ 通了 · 模型 · 耗时 · 回包` 或具体错误(HTTP 状态码)。**Key 不发往任何第三方,只在你本机 ↔ 你填的端点之间**。
+
+### 🧭 模型怎么选
+
+不确定接哪家?看 babelspan 内容站的 [翻译模型怎么选](https://www.babelspan.com/models.html) —— 中立对比国内免费/低价(智谱 GLM、阿里 Qwen、DeepSeek、Kimi、豆包)与海外(OpenAI / Anthropic / Google),不锁定任何厂商。popup 需配置时也会引导到这里。
+
+---
+
 ## 文档翻译(外部工具)
 
 点 popup 底部 **"📄 翻译 PDF / 文档"** 按钮,跳转到 [pdftranslator.org](https://pdftranslator.org/zh) 在线翻译 PDF / 文档(免费 1000 页/月,无需注册)。
@@ -74,9 +130,12 @@ translate-extension-release/
 │   ├── icons/
 │   └── src/
 │       ├── content.js       # 主翻译逻辑(1180+ 行,沉浸式 1.30.2 规则已集成)
-│       ├── background.js    # Service worker(右键菜单 + 后端转发)
-│       ├── popup.html/.js   # 弹出界面
-│       ├── options.html/.js # 设置页
+│       ├── background.js    # Service worker(右键菜单 + 后端转发 + %% 批量 + 测试服务)
+│       ├── langs.js         # 目标语言清单 + 系统语言推断
+│       ├── prompts.js       # 12 种 AI 角色提示词 + %% 批量协议(buildPrompt/splitBatch)
+│       ├── engines.js       # 引擎抽象(google_gtx / openai_compat / local_backend / auto 路由)
+│       ├── popup.html/.js   # 弹出界面(角色下拉 / 温度 / 测试服务)
+│       ├── options.html/.js # 设置页(术语表 / 并发 / 角色策略)
 │       └── inject.css       # 翻译样式 + 气泡样式
 └── backend/                  # Node.js 翻译后端
     ├── src/

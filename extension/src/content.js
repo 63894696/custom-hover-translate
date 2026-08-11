@@ -303,6 +303,15 @@
       for (const hint of META_CONTAINER_HINTS) {
         if (cls.includes(hint) || id.includes(hint)) return false;
       }
+      // 隐形"屏幕阅读器点击层"(#16,Reddit 相关帖子卡片):
+      //   卡片有一个 absolute inset-0 的 <a> 覆盖全卡片,文本藏在 faceplate-screen-reader-content
+      //   里供无障碍朗读,视觉上透明。若翻它,replace holder 会把这段文字变成可见的绝对定位
+      //   文本,叠在真可见标题上 → 标题"重复2次+叠在一起"。
+      //   判据:①含屏幕阅读器专用后代;②本身是 absolute inset-0 全卡片覆盖层。两者命中即跳。
+      try {
+        if (n.querySelector && n.querySelector('faceplate-screen-reader-content, .sr-only, [class*="screen-reader"], [class*="visually-hidden"]')) return false;
+        if (/absolute/.test(cls) && /inset-0/.test(cls)) return false;
+      } catch {}
       return true;
     }
     for (const n of nodes) {

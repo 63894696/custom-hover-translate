@@ -27,7 +27,7 @@
     {
       "matches": ["<all_urls>"],
       "exclude_matches": ["file:///*"],
-      "js": ["src/langs.js", "src/content.js"],
+      "js": ["src/langs.js", "src/content.js", "src/subtitles.js"],
       "css": ["src/inject.css"],
       "run_at": "document_idle",
       "all_frames": false
@@ -40,6 +40,7 @@
   "permissions": ["storage", "activeTab", "scripting", "webNavigation", "contextMenus"],
   "host_permissions": [
     "https://translate.googleapis.com/*",
+    "https://www.youtube.com/*",
     "http://127.0.0.1:12308/*",
     "http://localhost:12308/*"
   ],

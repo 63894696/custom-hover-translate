@@ -189,4 +189,43 @@
   .ct-toast-title { color: #60a5fa; }
   .ct-toast-header { color: #9ca3af; }
 }
+
+/* ============ 视频双语字幕 overlay ============
+ * 叠在 <video> 容器底部,半透明黑底 + 白字描边,任何视频底色上可读。
+ * 原文行(双语模式)较小较淡,译文行为主行。仅译文模式只显示译文行。
+ */
+.ct-sub-overlay {
+  position: absolute;
+  left: 50%;
+  bottom: 8%;
+  transform: translateX(-50%);
+  max-width: 86%;
+  z-index: 2147483646; /* 低于 ct-toast,高于大多数 video 控制条 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none; /* 不挡播放控制 */
+  text-align: center;
 }
+.ct-sub-line {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8), 0 0 1px rgba(0, 0, 0, 0.8);
+}
+.ct-sub-src {
+  font-size: 13px;
+  opacity: 0.85;
+}
+.ct-sub-trans {
+  font-size: 17px;
+  font-weight: 600;
+}
+

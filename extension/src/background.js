@@ -72,6 +72,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  // 字幕轨代取(字幕 2):YouTube timedtext 需 pot/cookie 授权,内容脚本直 fetch 返 200 但空体。
+  // 扩展 background 进程带扩展 UA + 完整 cookie,可拿到。仅用于 youtube.com timedtext,不收集内容。
+  if (msg.type === 'fetch-text') {
+    handleFetchText(msg)
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
+    return true;
+  }
+
   return false;
 });
 
@@ -99,6 +108,22 @@ async function handleTestService(msg) {
     return { ok: true, model: r.model || model, durationMs, sample: (r.text || '').slice(0, 40) };
   }
   return { ok: false, error: (r && r.error) || 'unknown', httpStatus: r && r.httpStatus, durationMs };
+}
+
+// 字幕轨代取:仅允许 youtube.com timedtext(防滥用为通用代理)。
+async function handleFetchText(msg) {
+  const url = msg && msg.url;
+  if (!url || typeof url !== 'string') return { ok: false, error: 'no_url' };
+  if (!/^https:\/\/(www\.)?youtube\.com\/api\/timedtext/.test(url)) {
+    return { ok: false, error: 'url_not_allowed' };
+  }
+  try {
+    const r = await fetch(url, { credentials: 'include', headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const text = await r.text();
+    return { ok: r.ok && text.length > 0, status: r.status, text };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
 }
 
 // ============ 失败诊断日志(用户问"模型翻不了有没有日志可查") ============
@@ -279,7 +304,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 function buildContextMenu() {
   chrome.contextMenus.removeAll(() => {
     // 用 navigator.language 推断目标语言(用户在 options 页改的 dstLang 优先)
-    chrome.storage.local.get(['dstLang'], (s) => {
+    chrome.storage.local.get(['dstLang', 'imageTranslateEnabled'], (s) => {
       const dstLang = s.dstLang || self.CT_LANGS.guessTargetLang();
       const label = `翻译为 ${self.CT_LANGS.langDisplayName(dstLang)}`;
       chrome.contextMenus.create({
@@ -287,6 +312,14 @@ function buildContextMenu() {
         title: label,
         contexts: ['selection'],
       });
+      // 图片右键:翻译图相关文本(alt/title/figcaption 等,不含 OCR);可在 options 关
+      if (s.imageTranslateEnabled !== false) {
+        chrome.contextMenus.create({
+          id: 'translate-image',
+          title: '翻译图片文字信息',
+          contexts: ['image'],
+        });
+      }
     });
   });
 }
@@ -295,43 +328,43 @@ chrome.runtime.onInstalled.addListener(() => buildContextMenu());
 chrome.runtime.onStartup.addListener(() => buildContextMenu());
 // options 页改 dstLang 后也要重建菜单(label 会变)
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.dstLang) buildContextMenu();
+  if (area === 'local' && (changes.dstLang || changes.imageTranslateEnabled)) buildContextMenu();
 });
 
 // 右键菜单点击 → 让 content.js 取选中文本 + 调后端翻译 + 弹通知
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== 'translate-selection') return;
-  if (!info.selectionText || !tab || tab.id == null) return;
+  if (!tab || tab.id == null) return;
   // 跳过受限页面(chrome:// / Edge / web store 等 content script 不能注入)
   if (!tab.url || /^(chrome|edge|about|chrome-extension|moz-extension):\/\//.test(tab.url)) return;
-  async function forward() {
-    try {
-      await chrome.tabs.sendMessage(tab.id, {
-        type: 'translate-selection',
-        text: info.selectionText,
-      });
-      return true;
-    } catch {
-      return false;
-    }
+
+  if (info.menuItemId === 'translate-selection') {
+    if (!info.selectionText) return;
+    await forwardToContent(tab.id, { type: 'translate-selection', text: info.selectionText });
+    return;
   }
-  // 第一次尝试:content script 可能未注入(MV3 document_idle 注入慢),
-  // 失败时主动 inject content.js + inject.css,然后再试一次
+  if (info.menuItemId === 'translate-image') {
+    // 让 content.js 用鼠标最近位置定位图片并收集图相关文本
+    await forwardToContent(tab.id, { type: 'translate-image', srcUrl: info.srcUrl || '' });
+    return;
+  }
+});
+
+// 统一转发:失败时注入 content.js 再试一次(右键菜单两条共用)
+async function forwardToContent(tabId, payload) {
+  async function forward() {
+    try { await chrome.tabs.sendMessage(tabId, payload); return true; }
+    catch { return false; }
+  }
   let ok = await forward();
   if (!ok) {
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ['src/content.js'],
-      });
-      try {
-        await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['src/inject.css'] });
-      } catch { /* CSS 注入失败不阻塞翻译 */ }
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['src/content.js'] });
+      try { await chrome.scripting.insertCSS({ target: { tabId }, files: ['src/inject.css'] }); } catch {}
       await new Promise((r) => setTimeout(r, 60));
       ok = await forward();
     } catch (e) {
       console.warn('[CT] inject+forward failed:', e);
     }
   }
-  if (!ok) console.warn('[CT] translate-selection finally failed for tab', tab.id);
-});
+  if (!ok) console.warn('[CT] forward finally failed for tab', tabId, payload.type);
+}

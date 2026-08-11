@@ -961,6 +961,24 @@
     autoTranslate = !!s.activeMode;
   }
 
+  // ============ 视频字幕(字幕 1 骨架接入) ============
+  // 读字幕设置并驱动 CT_SUBTITLES 启停;storage.onChanged 里即时响应。
+  let subtitlesEnabled = true;   // 默认开(options 可关)
+  let subtitleMode = 'bilingual'; // 'bilingual' | 'replace'
+  async function loadSubtitleSettings() {
+    const s = await chrome.storage.local.get(['subtitlesEnabled', 'subtitleMode']);
+    subtitlesEnabled = s.subtitlesEnabled !== false;
+    subtitleMode = s.subtitleMode === 'replace' ? 'replace' : 'bilingual';
+    applySubtitleState();
+  }
+  function applySubtitleState() {
+    if (!self.CT_SUBTITLES) return;
+    try {
+      if (subtitlesEnabled && enabled) self.CT_SUBTITLES.start({ mode: subtitleMode });
+      else self.CT_SUBTITLES.stop();
+    } catch (e) { console.warn('[CT] subtitles apply failed:', e); }
+  }
+
   let autoTranslate = false; // 全局自动翻译开关(用户持久化,activeMode 驱动)
   let autoMode = 'replace'; // 'bilingual' | 'replace'(默认仅译文)
   // 方向2(#22):本会话是否跑过整页翻译。observer 动态跟进的真正门控用它,而非 autoTranslate。
@@ -1000,6 +1018,15 @@
     if (changes.autoTranslate) { /* 忽略,改由 activeMode 驱动 */ }
     if (changes.autoMode && !changes.activeMode) {
       autoMode = changes.autoMode.newValue === 'bilingual' ? 'bilingual' : 'replace';
+    }
+    // 视频字幕:开关 / 双语模式变化 → 即时启停或重排
+    if (changes.subtitlesEnabled) {
+      subtitlesEnabled = changes.subtitlesEnabled.newValue !== false;
+      applySubtitleState();
+    }
+    if (changes.subtitleMode) {
+      subtitleMode = changes.subtitleMode.newValue === 'replace' ? 'replace' : 'bilingual';
+      if (self.CT_SUBTITLES) self.CT_SUBTITLES.setMode(subtitleMode);
     }
   });
 
@@ -1469,6 +1496,82 @@
     return { ok: true, removed: n };
   }
 
+  // ============ 翻译图片文字信息(右键菜单触发,不含 OCR) ============
+  // 收集图片的 alt / title / aria-label / figcaption / 相邻说明文本,经引擎翻译后在图片旁弹气泡。
+  // 像素级图中文字识别(OCR)本轮不支持——那需要视觉模型,成本/隐私另算。
+  async function translateImageAtCursor(srcUrl) {
+    const x = lastMouseX || window.innerWidth / 2;
+    const y = lastMouseY || window.innerHeight / 2;
+    // 定位图片:优先 srcUrl 精确匹配,兜底鼠标坐标 elementFromPoint
+    let img = null;
+    if (srcUrl) {
+      img = [...document.images].find((im) => im.currentSrc === srcUrl || im.src === srcUrl) || null;
+    }
+    if (!img) {
+      let el = document.elementFromPoint(x, y);
+      if (el && el.tagName !== 'IMG') el = el.closest && el.closest('img');
+      img = el || null;
+    }
+    if (!img) {
+      showImageToast('未找到图片', x, y);
+      return;
+    }
+    const gathered = gatherImageText(img);
+    if (!gathered) {
+      showImageToast('该图没有可翻译的文字信息(alt/标题/图注)。像素级 OCR 暂未支持。', x, y);
+      return;
+    }
+    const toast = createSelectionToast(gathered, x, y);
+    document.body.appendChild(toast.el);
+    let result = null;
+    try {
+      result = await chrome.runtime.sendMessage({ type: 'translate', text: gathered, srcLang: 'auto', dstLang });
+    } catch (e) {
+      toast.showError('翻译请求失败:无法连接 background');
+      return;
+    }
+    if (result && result.ok && result.text) {
+      toast.showResult(result.text, null);
+    } else {
+      toast.showError('翻译失败:' + (result && result.error || '未知错误'));
+    }
+  }
+
+  // 收集图片相关文本:alt → title → aria-label → figcaption → 相邻段落。返回首个非空,否则 null。
+  function gatherImageText(img) {
+    const pick = (s) => (s && String(s).trim()) || '';
+    let t = pick(img.alt);
+    if (t) return t;
+    t = pick(img.title);
+    if (t) return t;
+    t = pick(img.getAttribute && img.getAttribute('aria-label'));
+    if (t) return t;
+    // figure > figcaption
+    const fig = img.closest && img.closest('figure');
+    if (fig) {
+      const cap = fig.querySelector('figcaption');
+      t = pick(cap && cap.textContent);
+      if (t) return t;
+    }
+    // 相邻说明段(父级内紧随的短文本)
+    const parent = img.parentElement;
+    if (parent) {
+      for (const sib of [img.nextElementSibling, img.previousElementSibling]) {
+        if (sib && sib.textContent) {
+          const txt = pick(sib.textContent);
+          if (txt && txt.length <= 300) return txt;
+        }
+      }
+    }
+    return null;
+  }
+
+  function showImageToast(msg, x, y) {
+    const toast = createSelectionToast('图片翻译', x, y);
+    document.body.appendChild(toast.el);
+    toast.showError(msg);
+  }
+
   // ============ 翻译选中文本(右键菜单触发) ============
   // 沉浸式风格:在鼠标位置弹一个浮层气泡(div,z-index 最高),显示 loading → 译文
   // 不再用 chrome.notifications(用户视线会离开页面),改用原位 popup
@@ -1635,6 +1738,7 @@
     }
 
     loadSettings().then(() => {
+      loadSubtitleSettings();
       // hover 模式已废弃 — observer 自动跟进菜单展开/FAQ/SPA,无需手动 hover
       // 全局自动翻译:页面加载完成 + 设置加载完,自动跑一次整页翻译
       if (autoTranslate && enabled) {
@@ -1691,6 +1795,13 @@
         // 右键菜单触发:翻译用户选中的文本(错误也要 UI 反馈,不能静默)
         translateSelection(msg.text).catch((e) => {
           console.warn('[CT] translateSelection failed:', e);
+        });
+        sendResponse({ ok: true });
+        return true;
+      }
+      if (msg.type === 'translate-image') {
+        translateImageAtCursor(msg.srcUrl).catch((e) => {
+          console.warn('[CT] translateImage failed:', e);
         });
         sendResponse({ ok: true });
         return true;

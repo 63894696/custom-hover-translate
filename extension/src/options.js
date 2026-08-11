@@ -7,6 +7,8 @@ async function load() {
     'engine', 'baseURL', 'model', 'apiKey', 'endpoint',
     'dstLang', 'minChars', 'maxChars', 'ttlHours', 'showOriginal',
     'promptRole', 'termsText', 'temperature', 'concurrency',
+    'subtitlesEnabled', 'subtitleMode', 'subtitlePreferManual',
+    'imageTranslateEnabled',
   ]);
   const eng = s.engine || 'auto';
   const r = document.querySelector(`input[name="engine"][value="${eng}"]`);
@@ -28,6 +30,11 @@ async function load() {
   $('termsText').value = s.termsText || '';
   $('temperature').value = (s.temperature != null) ? s.temperature : 0.2;
   $('concurrency').value = s.concurrency || 6;
+  // 字幕设置
+  $('subtitlesEnabled').checked = s.subtitlesEnabled !== false;
+  $('subtitleMode').value = s.subtitleMode === 'replace' ? 'replace' : 'bilingual';
+  $('subtitlePreferManual').checked = s.subtitlePreferManual !== false;
+  $('imageTranslateEnabled').checked = s.imageTranslateEnabled !== false;
   toggleFieldsets();
 }
 
@@ -72,6 +79,10 @@ async function save() {
     termsText: $('termsText').value,
     temperature: Math.max(0, Math.min(2, parseFloat($('temperature').value) || 0)),
     concurrency: Math.max(1, Math.min(20, parseInt($('concurrency').value, 10) || 6)),
+    subtitlesEnabled: $('subtitlesEnabled').checked,
+    subtitleMode: $('subtitleMode').value === 'replace' ? 'replace' : 'bilingual',
+    subtitlePreferManual: $('subtitlePreferManual').checked,
+    imageTranslateEnabled: $('imageTranslateEnabled').checked,
   };
   // 端点/key 仅非空时存(避免空串覆盖)
   const baseURL = $('baseURL').value.trim();

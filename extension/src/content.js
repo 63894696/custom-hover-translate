@@ -126,7 +126,17 @@
   }
   // 扫描/选块时统计块文本,统一跳过这些"非正文"子标签(script/style/noscript/svg/code 等)。
   // 与 setMainTextBlock 写入端的 SKIP 同一套,根治"把 <script> 数据岛当正文翻译显示"的误伤。
-  const SCAN_SKIP_TAGS = new Set(['SCRIPT','STYLE','NOSCRIPT','SVG','CODE','PRE','TEXTAREA','INPUT','SELECT','KBD','SAMP','VAR','TITLE','IFRAME','CANVAS','TEMPLATE']);
+  const SCAN_SKIP_TAGS = new Set(['SCRIPT','STYLE','NOSCRIPT','SVG','CODE','PRE','TEXTAREA','INPUT','SELECT','KBD','SAMP','VAR','TITLE','IFRAME','CANVAS','TEMPLATE','DEFS','METADATA','FOREIGNOBJECT']);
+  // 元素是否属于"非正文"子树:自身或任一祖先标签命中 SKIP(统一转大写)。
+  // 必须转大写 + 向上查祖先:SVG 命名空间里的 <style>/<script> tagName 是小写,
+  // 且文本节点可能嵌在 <text>/<defs> 深层,直接父未必是 SKIP 标签(SVG @font-face 乱码根因)。
+  function inSkipSubtree(el) {
+    for (let cur = el; cur && cur.nodeType === 1; cur = cur.parentElement) {
+      const tag = cur.tagName;
+      if (tag && SCAN_SKIP_TAGS.has(tag.toUpperCase())) return true;
+    }
+    return false;
+  }
   // 只收集 el 内"非 SKIP 子树"的可见文本节点内容,拼接返回(对齐沉浸式翻译的 TEXT_NODE 收集思路)。
   // 用 TreeWalker 而非 innerText/textContent:后者会把可见 <script> 的代码一并算入(误伤根因)。
   function collectVisibleText(el) {
@@ -136,7 +146,7 @@
       const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
         acceptNode(n) {
           const p = n.parentElement;
-          if (!p || SCAN_SKIP_TAGS.has(p.tagName)) return NodeFilter.FILTER_REJECT;
+          if (!p || inSkipSubtree(p)) return NodeFilter.FILTER_REJECT;
           return ((n.nodeValue || '').trim().length > 0) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
         },
       });

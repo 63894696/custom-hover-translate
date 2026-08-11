@@ -191,7 +191,28 @@
 
     let nodes;
     try {
+      // 深度收集(方案2,#17):先扫主文档,再递归进每个 open shadow root 补扫。
+      // Reddit 社区卡片简介(shreddit-subreddit-header 的 shadow root)等 shadow 内容,
+      // document.querySelectorAll 穿透不到 → 漏翻。open shadow root(el.shadowRoot 非空)
+      // 可递归;closed 拿不到,跳过。译文注入(insertBefore/appendChild)对 shadow 内元素
+      // 天然可用,无需特判。样式靠元素内联/继承,shadow 内 inject.css 不生效但仅译文无需额外样式。
       nodes = Array.from(document.querySelectorAll(sel));
+      const seen = new Set(nodes);
+      const stack = Array.from(document.querySelectorAll('*')).filter((el) => el.shadowRoot);
+      const visitedRoots = new Set();
+      while (stack.length) {
+        const host = stack.pop();
+        const root = host.shadowRoot;
+        if (!root || visitedRoots.has(root)) continue;
+        visitedRoots.add(root);
+        let inner = [];
+        try { inner = Array.from(root.querySelectorAll(sel)); } catch (e) { continue; }
+        for (const el of inner) { if (!seen.has(el)) { seen.add(el); nodes.push(el); } }
+        // 下钻嵌套 shadow root(shadow 里再套 shadow)
+        try {
+          for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) stack.push(el); }
+        } catch (e) {}
+      }
     } catch (e) {
       return out;
     }

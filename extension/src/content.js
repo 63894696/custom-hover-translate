@@ -145,7 +145,12 @@
   // 旧实现的 bug:querySelectorAll 返回文档序(祖先在前),SECTION 大容器先入 seen,
   // 内部真正的 <p> 被判"嵌套"跳过 → 译文塞进 SECTION 级容器(另一个区域),且只翻到标题。
   // 新策略:先收集所有候选 → 按优先级排序(叶子优先)→ 若某节点的子树已选了更小的块,则丢弃它。
-  function scanAllBlocks({ minChars = 4, maxChars = 1500 } = {}) {
+  //
+  // mode 说明(P0 修复,2026-08-11):
+  //   'bilingual'(默认):priority 2 多文本容器在叶子块不足时可整块入选(译文只是附加在块尾,不破坏结构)。
+  //   'replace':priority 2 多文本容器【永不入选】——仅译文模式会清空块内全部文本节点再顶替,
+  //             若选容器会把导航/导语的分栏子结构抹平挤成一坨(用户截图1)。replace 只逐叶子块各替各的。
+  function scanAllBlocks({ minChars = 4, maxChars = 1500, mode = 'bilingual' } = {}) {
     const out = [];
     // 优先级:真正的段落标签 = 1(最想要);通用容器 div/span/section = 2(退而求其次)
     const LEAF_TAGS = new Set(['P', 'LI', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DD', 'DT', 'FIGCAPTION']);
@@ -301,16 +306,22 @@
       }
       return false;
     }
-    // 大容器 fallback:先跑完 priority 0/1,如果选出的"独立块"少于 5 个才补 priority 2
+    // 大容器 fallback:bilingual 下先跑完 priority 0/1,选出的"独立块"少于 5 个才补 priority 2;
+    // replace 模式下 priority 2 永不入选(整块顶替会抹平容器子结构)。
     let usedNonBig = 0;
     for (const c of candidates) {
       if (chosen.has(c.n) || blocked.has(c.n)) continue;
       if (isInsideChosen(c.n)) { blocked.add(c.n); continue; }
-      // priority 2 (大容器 MAIN/ARTICLE/SECTION) 仅在前两档选出的独立块数 < 5 时启用
-      if (c.priority === 2 && usedNonBig >= 5) { blocked.add(c.n); continue; }
-      if (c.priority !== 2) usedNonBig++;
-      // 选中它:占用它的整个子树(后代不再单独选)
+      if (c.priority === 2) {
+        if (mode === 'replace' || usedNonBig >= 5) { blocked.add(c.n); continue; }
+      } else {
+        usedNonBig++;
+      }
+      // 选中它:占用它的整个子树(后代不再单独选),并阻断祖先链
+      // (子块先选后,容器祖先若再被选会"吃掉"子块 → 子块双重翻译/被顶替)
       chosen.add(c.n);
+      let anc = c.n.parentElement;
+      while (anc) { blocked.add(anc); anc = anc.parentElement; }
       out.push({ block: c.n, text: c.text, lang: c.lang });
     }
 
@@ -516,8 +527,20 @@
   // 仅译文(块级):记录块内全部可译文本节点(含内联 <a>/<span> 里的)到 dataset,
   // 全部置空后在块首注入译文。这样跨内联标签的整段一起被译文顶替,不再残留英文片段。
   // restoreBlock 逐个把保存的原文写回,结构上 100% 还原。
+  //
+  // 兜底(P0):块内若含块级子元素(P/LI/H1-6/DIV/SECTION/ARTICLE/UL/OL/TABLE 等),
+  // 说明它是"容器"而非"叶子段"——整块顶替会抹平子结构。扫描器已在 replace 模式拦掉
+  // priority-2 容器,这里是双保险:此类块直接跳过(不替)。
+  const BLOCK_CHILD_TAGS = new Set(['P','LI','DIV','SECTION','ARTICLE','UL','OL','TABLE','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','PRE','HEADER','FOOTER','NAV','ASIDE','FIGURE','FORM','DL']);
+  function hasBlockLevelChild(block) {
+    for (const el of block.children) {
+      if (BLOCK_CHILD_TAGS.has(el.tagName)) return true;
+    }
+    return false;
+  }
   function setMainTextBlock(block, translated) {
     if (!block) return;
+    if (hasBlockLevelChild(block)) return; // 容器块:不整块顶替(防破框架)
     selfInjecting = true;
     try {
       if (!block.dataset.ctRepl) {
@@ -734,7 +757,7 @@
   function scanAndAutoTranslate() {
     if (!enabled) return;
     try {
-      const blocks = scanAllBlocks({ minChars: 4, maxChars: 1500 });
+      const blocks = scanAllBlocks({ minChars: 4, maxChars: 1500, mode: autoMode === 'replace' ? 'replace' : 'bilingual' });
       let n = 0;
       for (const it of blocks) {
         const el = it.block;
@@ -827,7 +850,7 @@
   const MAX_INFLIGHT_CHUNKS = 4; // 同时飞的 chunk 数(4×100 = 400 items 同时被翻译)
 
   function collectBlocks(mode /* 'bilingual' | 'replace' */) {
-    const blocks = scanAllBlocks({ minChars: 4, maxChars: 1500 });
+    const blocks = scanAllBlocks({ minChars: 4, maxChars: 1500, mode });
     const todo = [];
     let cached = 0;
     for (const it of blocks) {

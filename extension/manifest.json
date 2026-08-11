@@ -27,7 +27,7 @@
     {
       "matches": ["<all_urls>"],
       "exclude_matches": ["file:///*"],
-      "js": ["src/content.js"],
+      "js": ["src/langs.js", "src/content.js"],
       "css": ["src/inject.css"],
       "run_at": "document_idle",
       "all_frames": false

@@ -47,14 +47,7 @@
   <fieldset>
     <legend>翻译行为</legend>
     <label>目标语言
-      <select id="dstLang">
-        <option value="zh">中文(zh)</option>
-        <option value="en">英文(en)</option>
-        <option value="ja">日文(ja)</option>
-        <option value="ko">韩文(ko)</option>
-        <option value="fr">法文(fr)</option>
-        <option value="de">德文(de)</option>
-      </select>
+      <select id="dstLang"></select>
     </label>
     <label>段落最小字符数(小于则不翻译)
       <input type="number" id="minChars" min="4" max="200" value="12" />
@@ -77,6 +70,7 @@
     <span id="msg" class="hint"></span>
   </div>
 
+  <script src="langs.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

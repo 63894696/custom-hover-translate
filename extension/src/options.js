@@ -14,7 +14,8 @@ async function load() {
   $('model').value = s.model || '';
   $('apiKey').value = s.apiKey || '';
   $('endpoint').value = s.endpoint || '';
-  $('dstLang').value = s.dstLang || 'zh';
+  CT_LANGS.fillLangSelect($('dstLang'));
+  $('dstLang').value = s.dstLang || CT_LANGS.guessTargetLang();
   $('minChars').value = s.minChars || 12;
   $('maxChars').value = s.maxChars || 1500;
   $('ttlHours').value = s.ttlHours || 24;
@@ -67,7 +68,7 @@ async function save() {
 async function reset() {
   await chrome.storage.local.clear();
   // 恢复后默认 engine=auto
-  await chrome.storage.local.set({ engine: 'auto', dstLang: 'zh', enabled: true });
+  await chrome.storage.local.set({ engine: 'auto', dstLang: CT_LANGS.guessTargetLang(), enabled: true });
   await load();
   $('msg').textContent = '已恢复默认(自动模式)';
   setTimeout(() => { $('msg').textContent = ''; }, 3000);

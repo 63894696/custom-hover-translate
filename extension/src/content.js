@@ -351,15 +351,12 @@
       for (const ch of el.children) { if (BLOCK_LEVEL.has(ch.tagName)) return true; }
       return false;
     }
-    let usedNonBig = 0;
     for (const c of candidates) {
       if (chosen.has(c.n) || blocked.has(c.n)) continue;
       if (isInsideChosen(c.n)) { blocked.add(c.n); continue; }
       if (c.priority === 2) {
         // replace 永不选;bilingual 只选叶子型容器(无块级子),大容器排除
         if (mode === 'replace' || hasBlockChild(c.n)) { blocked.add(c.n); continue; }
-      } else {
-        usedNonBig++;
       }
       // 选中它:占用它的整个子树(后代不再单独选),并阻断祖先链
       // (子块先选后,容器祖先若再被选会"吃掉"子块 → 子块双重翻译/被顶替)

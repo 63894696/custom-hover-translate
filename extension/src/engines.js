@@ -46,6 +46,11 @@ async function detectEngine(force = false) {
 }
 
 // ---------- 决定本次用哪个引擎 ----------
+// B 步(2026-08-12)多级自动降级路由(auto 模式):
+//   1. google_gtx   — 海外能连 Google,免 key
+//   2. openai_compat— 国内主通路(用户自配的 OpenAI 兼容端点)
+//   3. need_config  — 都不通且没配端点 → 引导(链 babelspan 模型页)
+// 显式指定引擎时(engine != auto)不做降级,直接按用户选择。
 async function resolveEngine() {
   const cfg = await readCfg();
   const eng = cfg.engine || 'auto';
@@ -258,18 +263,28 @@ async function listModels({ baseURL, apiKey }) {
 
 // ---------- 健康/状态 ----------
 // 返回给 popup 展示:不是"后端是否在线",而是"当前翻译引擎是否就绪"。
+// B 步:need_config 引导做实——告诉国内用户去哪选模型/拿 key(babelspan 模型页)。
+const MODELS_GUIDE_URL = 'https://www.babelspan.com/models.html';
 async function engineStatus() {
   const eng = await resolveEngine();
   if (eng.kind === 'need_config') {
-    return { ok: false, needConfig: true, label: '需配置', hint: '当前网络连不上内置翻译,请填入一个翻译服务的端点和 Key' };
+    return {
+      ok: false, needConfig: true, label: '需配置',
+      hint: '当前网络连不上内置翻译。请填入一个翻译服务的端点和 Key(国内推荐智谱/通义/DeepSeek,免费或极低价)。',
+      guideUrl: MODELS_GUIDE_URL,
+      guideText: '不知道选哪个?看模型怎么选 →',
+    };
   }
   if (eng.kind === 'error') {
-    return { ok: false, needConfig: true, label: '需配置', hint: eng.error };
+    return { ok: false, needConfig: true, label: '需配置', hint: eng.error, guideUrl: MODELS_GUIDE_URL, guideText: '模型选型帮助 →' };
   }
   if (eng.kind === 'google_gtx') return { ok: true, label: '就绪', engine: '内置翻译(Google)' };
-  if (eng.kind === 'openai_compat') return { ok: true, label: '就绪', engine: `自定义端点(${eng.model})` };
+  if (eng.kind === 'openai_compat') {
+    const via = eng.autoFromDetect ? ' · 已自动切换' : '';
+    return { ok: true, label: '就绪', engine: `自定义端点(${eng.model})${via}` };
+  }
   if (eng.kind === 'local_backend') return { ok: true, label: '就绪', engine: '本地后端(进阶)' };
-  return { ok: false, needConfig: true, label: '需配置' };
+  return { ok: false, needConfig: true, label: '需配置', guideUrl: MODELS_GUIDE_URL, guideText: '模型选型帮助 →' };
 }
 
 // 暴露给 background.js(MV3 service worker 用 importScripts 或同文件;这里挂到 self)

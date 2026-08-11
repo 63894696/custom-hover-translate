@@ -1,52 +1,27 @@
-// Service Worker:转发 content script 的 translate / health 请求到本机后端。
-// 端点从 chrome.storage.local 读(用户在 options 里改过的话),默认 127.0.0.1:12308。
-// 单例 in-flight:同 key 并发只发一次后端请求。
+// Service Worker:把 content script 的 translate / translate-batch 请求交给内置引擎(engines.js)。
+// 2026-08-11 重构:不再强制本地 Node 后端;默认引擎扩展内直连(google_gtx 免 key / 用户自定义
+// OpenAI 兼容端点),本地后端降级为可选高级项。单例 in-flight:同 key 并发只发一次请求。
 
-const DEFAULT_ENDPOINT = 'http://127.0.0.1:12308';
-const TIMEOUT_MS = 15000;
+// MV3 classic service worker:用 importScripts 引入内置引擎。
+try { importScripts('engines.js'); } catch (e) { console.warn('[CT] import engines.js failed', e); }
+
+const TIMEOUT_MS = 30000;
 
 const inflight = new Map(); // key -> Promise
 
-async function getEndpoint() {
-  const { endpoint } = await chrome.storage.local.get('endpoint');
-  return endpoint || DEFAULT_ENDPOINT;
-}
-
-async function readOptions() {
-  return await chrome.storage.local.get([
-    'endpoint',
-    'dstLang',
-    'provider',
-    'model',
-    'showOriginal',
-  ]);
-}
-
-async function postJSON(url, body, signal) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
-  });
-  let data = null;
-  try {
-    data = await r.json();
-  } catch {
-    /* ignore */
+// 批量翻译的简单并发限制(扩展内直连,无后端节流)
+async function mapLimit(items, limit, worker) {
+  const results = new Array(items.length);
+  let idx = 0;
+  async function run() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await worker(items[i], i);
+    }
   }
-  return { ok: r.ok, status: r.status, data };
-}
-
-async function getJSON(url, signal) {
-  const r = await fetch(url, { signal });
-  let data = null;
-  try {
-    data = await r.json();
-  } catch {
-    /* ignore */
-  }
-  return { ok: r.ok, status: r.status, data };
+  const runners = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, run);
+  await Promise.all(runners);
+  return results;
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -66,13 +41,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === 'fallback-next' || msg.type === 'fallback-previous' || msg.type === 'fallback-toggle' || msg.type === 'fallback-set') {
-    handleFallbackControl(msg)
-      .then((resp) => sendResponse(resp))
-      .catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
-    return true;
-  }
-
   if (msg.type === 'health') {
     handleHealth()
       .then((resp) => sendResponse(resp))
@@ -80,61 +48,64 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'redetect-engine') {
+    self.CT_ENGINES.detectEngine(true)
+      .then((r) => sendResponse({ ok: true, detected: r }))
+      .catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
+    return true;
+  }
+
+  if (msg.type === 'list-models') {
+    handleListModels(msg)
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
+    return true;
+  }
+
   return false;
 });
+
+// ============ 失败诊断日志(用户问"模型翻不了有没有日志可查") ============
+// 只存本机 chrome.storage.local._ct_log(最多 100 条,环形),绝不上行。
+// 记录:时间/引擎/模型/错误/耗时/文本长度(不记文本内容,避免泄露隐私)。
+async function logCT(entry) {
+  try {
+    const { _ct_log } = await chrome.storage.local.get('_ct_log');
+    const arr = Array.isArray(_ct_log) ? _ct_log : [];
+    arr.push({ ts: Date.now(), ...entry });
+    while (arr.length > 100) arr.shift();
+    await chrome.storage.local.set({ _ct_log: arr });
+  } catch {}
+}
+function logFailure(provider, model, r, textLen) {
+  console.warn(`[CT] 翻译失败 provider=${provider} model=${model} err=${r && r.error} http=${r && r.httpStatus || ''} len=${textLen}`);
+  logCT({ kind: 'fail', provider, model, error: (r && r.error) || 'unknown', httpStatus: r && r.httpStatus, durationMs: r && r.durationMs, textLen });
+}
+
+// 拉取自定义端点的模型列表。允许 popup/options 直接传 baseURL/apiKey
+// (还没保存到 storage 时也能拉),否则回退读 storage 里的已存配置。
+async function handleListModels(msg) {
+  let { baseURL, apiKey } = msg;
+  if (!baseURL) {
+    const s = await chrome.storage.local.get(['baseURL', 'apiKey']);
+    baseURL = baseURL || s.baseURL;
+    apiKey = apiKey || s.apiKey;
+  }
+  const r = await self.CT_ENGINES.listModels({ baseURL, apiKey: apiKey || '' });
+  return r;
+}
 
 async function handleTranslate({ key, text, srcLang = '', dstLang = '' }) {
   if (inflight.has(key)) {
     return inflight.get(key);
   }
-
   const p = (async () => {
-    const opt = await readOptions();
-    const endpoint = opt.endpoint || DEFAULT_ENDPOINT;
-    const finalDst = dstLang || opt.dstLang || 'zh';
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-
-    try {
-      const body = {
-        text,
-        srcLang,
-        dstLang: finalDst,
-        provider: opt.provider || '',
-        model: opt.model || '',
-      };
-      const r = await postJSON(`${endpoint}/translate`, body, ctrl.signal);
-      clearTimeout(timer);
-      if (!r.ok || !r.data) {
-        return {
-          ok: false,
-          key,
-          error: (r.data && r.data.error) || `HTTP ${r.status}`,
-          durationMs: 0,
-        };
-      }
-      return {
-        ok: !!r.data.ok,
-        key,
-        text: r.data.text || '',
-        error: r.data.error || null,
-        provider: r.data.provider,
-        model: r.data.model,
-        durationMs: r.data.durationMs || 0,
-        mock: !!r.data.mock,
-      };
-    } catch (e) {
-      clearTimeout(timer);
-      const err =
-        e && e.name === 'AbortError'
-          ? 'timeout'
-          : e && /Failed to fetch|NetworkError|fetch failed/i.test(String(e.message))
-          ? 'network'
-          : String((e && e.message) || e);
-      return { ok: false, key, error: err, durationMs: 0 };
-    }
+    const { dstLang: stored } = await chrome.storage.local.get('dstLang');
+    const finalDst = dstLang || stored || 'zh';
+    const r = await self.CT_ENGINES.engineTranslate({ text, srcLang, dstLang: finalDst });
+    if (r && !r.ok && !r.needConfig) logFailure(r.provider || 'engine', r.model || '', r, (text || '').length);
+    return { ...r, key };
   })();
-
   inflight.set(key, p);
   try {
     return await p;
@@ -143,42 +114,11 @@ async function handleTranslate({ key, text, srcLang = '', dstLang = '' }) {
   }
 }
 
+// 引擎就绪状态(不再是"后端健康")
 async function handleHealth() {
   try {
-    const endpoint = await getEndpoint();
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    const r = await getJSON(`${endpoint}/health`, ctrl.signal);
-    clearTimeout(timer);
-    return { ok: r.ok && r.data && r.data.ok === true, data: r.data };
-  } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) };
-  }
-}
-
-// 处理 popup 发来的 fallback 控制消息
-async function handleFallbackControl(msg) {
-  const endpoint = await getEndpoint();
-  const action = msg.type === 'fallback-next' ? 'next'
-                : msg.type === 'fallback-previous' ? 'previous'
-                : msg.type === 'fallback-toggle' ? 'toggle'
-                : 'set';
-  const body = { action };
-  if (action === 'set') {
-    body.provider = msg.provider;
-  }
-  // fallback-toggle:根据当前 enabled 状态翻转
-  if (action === 'toggle') {
-    try {
-      const h = await getJSON(`${endpoint}/health`);
-      body.action = h.data && h.data.fallbackEnabled ? 'disable' : 'enable';
-    } catch {
-      body.action = 'enable';
-    }
-  }
-  try {
-    const r = await postJSON(`${endpoint}/select-provider`, body, null);
-    return r.data || r;
+    const s = await self.CT_ENGINES.engineStatus();
+    return { ok: !!s.ok, data: s, needConfig: !!s.needConfig };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
@@ -188,48 +128,56 @@ async function handleTranslateBatch({ items = [], dstLang = '', concurrency = 6 
   if (!Array.isArray(items) || items.length === 0) {
     return { ok: false, error: 'items 必须是非空数组' };
   }
-  try {
-    const endpoint = await getEndpoint();
-    const opt = await readOptions();
-    const ctrl = new AbortController();
-    // 批量允许更长超时:基础 30s + 每项 1.5s,封顶 180s
-    const totalTimeoutMs = Math.min(180000, 30000 + items.length * 1500);
-    const timer = setTimeout(() => ctrl.abort(), totalTimeoutMs);
-    const body = {
-      items,
-      dstLang: dstLang || opt.dstLang || 'zh',
-      concurrency: Math.max(1, Math.min(20, Number(concurrency) || 6)),
-    };
-    const r = await postJSON(`${endpoint}/translate/batch`, body, ctrl.signal);
-    clearTimeout(timer);
-    if (!r.ok || !r.data) {
-      return {
-        ok: false,
-        error: (r.data && r.data.error) || `HTTP ${r.status}`,
-        status: r.status,
-      };
+  const { dstLang: stored } = await chrome.storage.local.get('dstLang');
+  const finalDst = dstLang || stored || 'zh';
+  const conc = Math.max(1, Math.min(20, Number(concurrency) || 6));
+
+  let success = 0, fail = 0;
+  const usedByProvider = {};
+  let lastResp = null;
+  let needConfig = false;
+
+  const results = await mapLimit(items, conc, async (it) => {
+    const text = it && it.text != null ? it.text : (typeof it === 'string' ? it : '');
+    // content.js 用 id 匹配结果(也可能是 key,做个兼容)
+    const id = (it && (it.id != null ? it.id : it.key)) || '';
+    const srcLang = (it && it.srcLang) || '';
+    const r = await self.CT_ENGINES.engineTranslate({ text, srcLang, dstLang: finalDst });
+    if (r.needConfig) needConfig = true;
+    if (r && r.ok) {
+      success++;
+      const prov = r.provider || 'engine';
+      usedByProvider[prov] = (usedByProvider[prov] || 0) + 1;
+      lastResp = r;
+    } else {
+      fail++;
+      if (r && !r.needConfig) logFailure(r.provider || 'engine', r.model || '', r, (text || '').length);
     }
-    return r.data;
-  } catch (e) {
-    const err =
-      e && e.name === 'AbortError'
-        ? 'timeout'
-        : e && /Failed to fetch|NetworkError|fetch failed/i.test(String(e.message))
-        ? 'network'
-        : String((e && e.message) || e);
-    return { ok: false, error: err };
-  }
+    return { id, ok: !!(r && r.ok), text: (r && r.text) || '', error: (r && r.error) || null, provider: r && r.provider, model: r && r.model };
+  });
+
+  return {
+    ok: !needConfig,
+    needConfig,
+    results,
+    success, fail,
+    total: items.length,
+    usedByProvider,
+    lastResp: lastResp ? { provider: lastResp.provider, model: lastResp.model, durationMs: lastResp.durationMs, fallbackUsed: !!lastResp.fallbackUsed } : null,
+  };
 }
 
 // 安装/启动默认值
 chrome.runtime.onInstalled.addListener(async () => {
-  const cur = await chrome.storage.local.get(['enabled', 'dstLang', 'showOriginal', 'endpoint']);
+  const cur = await chrome.storage.local.get(['enabled', 'dstLang', 'showOriginal', 'engine']);
   const patch = {};
   if (cur.enabled === undefined) patch.enabled = true;
   if (!cur.dstLang) patch.dstLang = 'zh';
   if (cur.showOriginal === undefined) patch.showOriginal = false;
-  if (!cur.endpoint) patch.endpoint = DEFAULT_ENDPOINT;
+  if (!cur.engine) patch.engine = 'auto'; // 默认自动探测,不预设厂商
   if (Object.keys(patch).length) await chrome.storage.local.set(patch);
+  // 安装后立即探测一次网络环境(能连 Google 与否),缓存结果供首次翻译用
+  try { await self.CT_ENGINES.detectEngine(true); } catch {}
 });
 
 // SPA 路由变化:pushState/replaceState/hashchange → 重跑当前 activeMode
@@ -255,7 +203,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 // 右键菜单:把选中文本翻译成目标语言(默认按用户系统语言选)
-// 用户选好文本 → 右键 → "Custom Hover Translate → 翻译为 XXX" → content.js 调后端 + 弹通知
+// 用户选好文本 → 右键 → "翻译为 XXX" → content.js 调内置引擎 + 弹通知
 function buildContextMenu() {
   chrome.contextMenus.removeAll(() => {
     // 用 navigator.language 推断目标语言(用户在 options 页改的 dstLang 优先)

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>attr-translate-test</title></head>
+<body>
+  <h1>Attribute translation test page</h1>
+
+  <!-- 应被采集并翻译的属性 -->
+  <img id="img1" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="A red circle on a white background">
+  <button id="btn1" aria-label="Open the settings menu">⚙</button>
+  <input id="in1" placeholder="Enter your email address">
+  <textarea id="ta1" placeholder="Type your message here"></textarea>
+  <abbr id="abbr1" title="HyperText Markup Language">HTML</abbr>
+
+  <!-- 不应被采集:太短 / 已是中文 / notranslate / metadata -->
+  <img id="img-short" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="OK">
+  <img id="img-zh" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="红色的圆形图标">
+  <img id="img-nt" class="notranslate" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="Do not translate this text">
+  <abbr id="abbr-meta" title="2024-01-01">date</abbr>
+
+  <!-- 一个普通段落,确认块翻译仍正常(回归) -->
+  <p id="leaf1">This is a standalone paragraph with enough text to translate.</p>
+
+  <script>
+    window.__sentMessages = [];
+    window.chrome = {
+      storage: {
+        local: { get: async () => ({}), set: async () => {}, remove: () => {} },
+        onChanged: { addListener: () => {} },
+      },
+      runtime: {
+        sendMessage: async (msg) => {
+          window.__sentMessages.push(msg && msg.type);
+          if (msg && msg.type === 'translate-batch') {
+            return { ok: true, provider: 'stub', model: 'm1', durationMs: 1,
+              results: msg.items.map((it, i) => ({ id: String(i), ok: true, text: '【译】' + it.text })) };
+          }
+          if (msg && msg.type === 'translate') {
+            return { ok: true, text: '【译】' + msg.text, provider: 'stub', model: 'm1' };
+          }
+          return { ok: true };
+        },
+        onMessage: { addListener: (fn) => { window.__ctOnMessage = fn; } },
+      },
+    };
+  </script>
+  <script src="/content.js"></script>
+</body></html>

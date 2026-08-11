@@ -336,6 +336,82 @@
     return out;
   }
 
+  // ============ P1a:属性文本采集(img alt / aria-label / placeholder / abbr title) ============
+  // 与块文本互补:块扫描只碰 textContent,这里补齐"看不见但读得到"的属性文本。
+  // 只改 attribute 值、不动 DOM 结构 → 天然无破框架风险。
+  // bilingual: attr = "原 (译)";replace: attr = "译"。原文存 dataset.ctAttrOrig 供还原。
+  // 属性值专用 metadata 过滤(顶层,scanAttrs 用;scanAllBlocks 里有同名嵌套版处理块文本)。
+  // 属性文本短,只需挡"纯日期/@用户名/#编号/xx前"这类明显非正文。
+  function attrLooksLikeMetadata(text) {
+    if (!text || text.length > 80) return false;
+    const t = text.trim();
+    if (/^\d+\s+(minute|hour|day|week|month|year|second)s?\s+ago$/i.test(t)) return true;
+    if (/^(just now|a moment ago|yesterday|today|now)$/i.test(t)) return true;
+    if (/^\d+\s+(分钟|小时|天|周|月|年|秒)前$/.test(t)) return true;
+    if (/^@\w+$/.test(t)) return true;
+    if (/^#\d+$/.test(t)) return true;
+    // 纯日期(2024-01-01 / 2024/01/01 / 01-01-2024 等)
+    if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(t)) return true;
+    if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(t)) return true;
+    return false;
+  }
+
+  const ATTR_TARGETS = [
+    // [选择器, 属性名](abbr title 最常见;a title 多为链接冗余文本,不采)
+    ['img[alt]', 'alt'],
+    ['[aria-label]', 'aria-label'],
+    ['input[placeholder]', 'placeholder'],
+    ['textarea[placeholder]', 'placeholder'],
+    ['abbr[title]', 'title'],
+  ];
+  function scanAttrs() {
+    const seen = new Set(); // 元素去重(一个元素可能命中多个选择器,按 el+attr 唯一)
+    const out = [];
+    for (const [sel, attr] of ATTR_TARGETS) {
+      let nodes;
+      try { nodes = document.querySelectorAll(sel); } catch { continue; }
+      for (const el of nodes) {
+        const k = attr + '\0' + (el.dataset.ctAttrIdx || (el.dataset.ctAttrIdx = String(seen.size + out.length)));
+        if (seen.has(k)) continue;
+        seen.add(k);
+        // 用户明示跳过
+        if (el.closest && el.closest('.notranslate, [translate="no"]')) continue;
+        // 已处理过的元素:用记录的原文(ctAttrOrig)继续判重/供模式切换重算,
+        // 不能读 getAttribute(可能是双语"原 (译)",会污染 cache key / 二次翻译)
+        const already = el.dataset.ctAttr === attr;
+        const raw = (already ? (el.dataset.ctAttrOrig || '') : (el.getAttribute(attr) || '')).trim();
+        // 太短(单图标/箭头/OK 这类无信息)或太长(塞了整段)都不像可译文本
+        if (raw.length < 4 || raw.length > 300) continue;
+        if (attrLooksLikeMetadata(raw)) continue;
+        const lang = detectLang(raw);
+        if (lang.tag === dstLang) continue;
+        if (dstLang === 'zh' && isChinese(raw)) continue;
+        out.push({ el, attr, text: raw, lang: lang.tag, already });
+      }
+    }
+    return out;
+  }
+
+  // 回写译文(含缓存命中分支)。dataset.ctAttrOrig 只存"最初的原文",双语/仅译文据此重算:
+  //   bilingual → "原 (译)";replace → 纯译。模式切换(先双语后仅译文)会从 ctAttrOrig 重算,
+  //   不会把"原 (译)"当原文再套一层(防嵌套的关键)。
+  function applyAttr(el, attr, translated, mode) {
+    if (!el.dataset.ctAttrOrig) el.dataset.ctAttrOrig = el.getAttribute(attr) || '';
+    const orig = el.dataset.ctAttrOrig;
+    el.dataset.ctAttr = attr;
+    el.dataset.ctAttrMode = mode;
+    el.setAttribute(attr, mode === 'replace' ? translated : (orig ? `${orig} (${translated})` : translated));
+  }
+  function restoreAttr(el) {
+    const attr = el.dataset.ctAttr;
+    if (!attr) return;
+    if (el.dataset.ctAttrOrig != null) el.setAttribute(attr, el.dataset.ctAttrOrig);
+    delete el.dataset.ctAttr;
+    delete el.dataset.ctAttrMode;
+    delete el.dataset.ctAttrOrig;
+    delete el.dataset.ctAttrIdx;
+  }
+
   // ============ render ============
   function findExisting(block, key) {
     // 译文块现在追加在 block 内部(beforeend),从最后一个子节点往上找
@@ -874,6 +950,27 @@
     return { blocks, todo, skippedNoTextNode: 0, cached };
   }
 
+  // 属性版采集:与 collectBlocks 同构(key/cache/去重),注入走 applyAttr
+  function collectAttrs(mode) {
+    const items = scanAttrs();
+    const todo = [];
+    let cached = 0;
+    for (const it of items) {
+      const key = makeKey(it.text, it.lang);
+      const hit = cache.get(key);
+      if (hit) {
+        cached++;
+        // 无条件按当前模式重写:applyAttr 从 ctAttrOrig(原文)重算,模式切换也正确
+        applyAttr(it.el, it.attr, hit, mode);
+        continue;
+      }
+      // 无缓存时,若属性已是本模式译文(重跑),跳过避免重复请求
+      if (it.el.dataset.ctAttr === it.attr && it.el.dataset.ctAttrMode === mode) continue;
+      todo.push({ key, text: it.text, srcLang: it.lang, el: it.el, attr: it.attr });
+    }
+    return { items, todo, cached };
+  }
+
   // 共享的分批流式翻译执行器
   async function streamTranslate(todo, applyToBlock) {
     // 按 text 去重
@@ -988,21 +1085,25 @@
   // =============== 双语对照入口 ===============
   async function translateAll() {
     const { blocks, todo, skippedNoTextNode, cached } = collectBlocks('bilingual');
-    if (!blocks.length) {
+    const attrs = collectAttrs('bilingual');
+    const allTodo = todo.concat(attrs.todo);
+    const totalUnits = blocks.length + attrs.items.length;
+    if (!totalUnits) {
       return { ok: true, total: 0, success: 0, fail: 0, message: '页面里没找到需要翻译的段落(可能已是中文,或段落都太短)' };
     }
-    if (todo.length === 0) {
+    if (allTodo.length === 0) {
       return {
-        ok: true, total: blocks.length, success: cached, fail: 0,
+        ok: true, total: totalUnits, success: cached + attrs.cached, fail: 0,
         message: skippedNoTextNode > 0
-          ? `全部 ${cached} 段已用缓存,另有 ${skippedNoTextNode} 个包装器块已跳过`
-          : `全部 ${cached} 段已用缓存`,
+          ? `全部 ${cached + attrs.cached} 项已用缓存,另有 ${skippedNoTextNode} 个包装器块已跳过`
+          : `全部 ${cached + attrs.cached} 项已用缓存`,
       };
     }
 
-    const r = await streamTranslate(todo, (t, result) => {
+    const r = await streamTranslate(allTodo, (t, result) => {
       if (result && result.ok && result.text) {
-        appendBilingualBlock(t.block, result.text);
+        if (t.attr) applyAttr(t.el, t.attr, result.text, 'bilingual');
+        else appendBilingualBlock(t.block, result.text);
       }
       // 失败:不写,保留原文(避免覆盖);只让 popup 看到 fail 计数
     });
@@ -1042,21 +1143,25 @@
   // =============== 仅译文入口(用主文本节点直接改 nodeValue) ===============
   async function translateAllReplace() {
     const { blocks, todo, skippedNoTextNode, cached } = collectBlocks('replace');
-    if (!blocks.length) {
+    const attrs = collectAttrs('replace');
+    const allTodo = todo.concat(attrs.todo);
+    const totalUnits = blocks.length + attrs.items.length;
+    if (!totalUnits) {
       return { ok: true, total: 0, success: 0, fail: 0, message: '页面里没找到需要翻译的段落(可能已是中文,或段落都太短)' };
     }
-    if (todo.length === 0) {
+    if (allTodo.length === 0) {
       return {
-        ok: true, total: blocks.length, success: cached, fail: 0,
+        ok: true, total: totalUnits, success: cached + attrs.cached, fail: 0,
         message: skippedNoTextNode > 0
-          ? `全部 ${cached} 段已用缓存,另有 ${skippedNoTextNode} 个包装器块已跳过`
-          : `全部 ${cached} 段已用缓存`,
+          ? `全部 ${cached + attrs.cached} 项已用缓存,另有 ${skippedNoTextNode} 个包装器块已跳过`
+          : `全部 ${cached + attrs.cached} 项已用缓存`,
       };
     }
 
-    const r = await streamTranslate(todo, (t, result) => {
+    const r = await streamTranslate(allTodo, (t, result) => {
       if (result && result.ok && result.text) {
-        setMainTextBlock(t.block, result.text);
+        if (t.attr) applyAttr(t.el, t.attr, result.text, 'replace');
+        else setMainTextBlock(t.block, result.text);
       }
       // 失败:保留原文不动
     });
@@ -1121,6 +1226,8 @@
     document.querySelectorAll('.ct-bilingual, .ct-replaced').forEach((el) => { restoreBlock(el); n++; });
     // 2) 兼容老式 .ct-target 容器(若有遗留)
     document.querySelectorAll('.ct-target').forEach((el) => { el.remove(); n++; });
+    // 3) P1a:还原属性译文(alt/aria-label/placeholder/title)
+    document.querySelectorAll('[data-ct-attr]').forEach((el) => { restoreAttr(el); n++; });
     try { chrome.storage.local.remove('_ct_progress'); } catch {}
     return { ok: true, removed: n };
   }

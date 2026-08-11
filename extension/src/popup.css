@@ -300,6 +300,14 @@ footer {
   cursor: pointer;
 }
 .action-btn:hover { background: #3a7eef; }
+.guide-link {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #4a8eff;
+  text-decoration: none;
+  cursor: pointer;
+}
+.guide-link:hover { text-decoration: underline; }
 
 /* 高级设置折叠 */
 details.advanced {

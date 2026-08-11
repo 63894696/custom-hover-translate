@@ -63,8 +63,43 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  // D 步:测试服务 — 用当前配置(或消息里临时传入的配置)发一条极短翻译,
+  // 返回耗时/模型/错误或 needConfig,帮用户确认"端点+Key+模型"配对了没有。
+  if (msg.type === 'test-service') {
+    handleTestService(msg)
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
+    return true;
+  }
+
   return false;
 });
+
+// 测试服务:优先用消息里临时填的 baseURL/apiKey/model(用户还没点保存),
+// 否则回退 storage 里已存配置。只发一条 "Hello",不记录内容。
+async function handleTestService(msg) {
+  let { baseURL, apiKey, model } = msg || {};
+  if (!baseURL || !model) {
+    const s = await chrome.storage.local.get(['baseURL', 'apiKey', 'model']);
+    baseURL = baseURL || s.baseURL;
+    apiKey = apiKey !== undefined ? apiKey : s.apiKey;
+    model = model || s.model;
+  }
+  if (!baseURL || !model) {
+    return { ok: false, needConfig: true, error: '请先填 API Base URL 和模型名' };
+  }
+  const t0 = Date.now();
+  const r = await self.CT_ENGINES.callOpenAICompat({
+    baseURL, apiKey: apiKey || '', model,
+    text: 'Hello', srcLang: 'en', dstLang: 'zh',
+    promptRole: 'general', terms: '',
+  });
+  const durationMs = Date.now() - t0;
+  if (r && r.ok) {
+    return { ok: true, model: r.model || model, durationMs, sample: (r.text || '').slice(0, 40) };
+  }
+  return { ok: false, error: (r && r.error) || 'unknown', httpStatus: r && r.httpStatus, durationMs };
+}
 
 // ============ 失败诊断日志(用户问"模型翻不了有没有日志可查") ============
 // 只存本机 chrome.storage.local._ct_log(最多 100 条,环形),绝不上行。

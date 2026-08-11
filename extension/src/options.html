@@ -15,7 +15,7 @@
     <label class="radio"><input type="radio" name="engine" value="google_gtx" /> 内置翻译(Google,免 Key)— 需能访问 Google</label>
     <label class="radio"><input type="radio" name="engine" value="openai_compat" /> 自定义端点(OpenAI 兼容)— 自己选模型厂商,填端点 + Key</label>
     <label class="radio"><input type="radio" name="engine" value="local_backend" /> 本地后端(进阶)— 本机 Ollama / 缓存 / 批量节流</label>
-    <p class="hint">我们不预设任何国内或海外厂商。选「自定义端点」即可接入任何 OpenAI 兼容的翻译服务。<a href="https://prisir.example.com/translate-models" target="_blank" rel="noopener">不知道选哪个?看模型翻译能力评测 →</a></p>
+    <p class="hint">我们不预设任何国内或海外厂商。选「自定义端点」即可接入任何 OpenAI 兼容的翻译服务。<a href="https://www.babelspan.com/models.html" target="_blank" rel="noopener">不知道选哪个?看模型怎么选 →</a></p>
   </fieldset>
 
   <fieldset id="custom-fieldset">
@@ -34,6 +34,21 @@
       <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off" />
     </label>
     <p class="hint" id="fetch-models-hint">任何 OpenAI 兼容(Chat Completions)的服务都可接入。Key 只保存在本机。</p>
+    <p class="hint">
+      <button id="test-service" type="button" class="mini">测试服务</button>
+      <span id="test-service-result"></span>
+    </p>
+  </fieldset>
+
+  <fieldset id="role-fieldset">
+    <legend>翻译策略(AI 角色)— 仅「自定义端点」生效</legend>
+    <label>角色
+      <select id="promptRole"></select>
+    </label>
+    <p class="hint" id="role-desc">同一台模型,换个角色得到面向不同场景的译文。google_gtx 内置翻译无此概念。</p>
+    <label>术语表(可选,一行一条「原文=译文」)
+      <textarea id="termsText" rows="3" placeholder="例:&#10;Babelspan=通天尺规&#10;rubric=尺规"></textarea>
+    </label>
   </fieldset>
 
   <fieldset id="backend-fieldset">
@@ -58,6 +73,12 @@
     <label>缓存 TTL 小时
       <input type="number" id="ttlHours" min="1" max="720" value="24" />
     </label>
+    <label>温度(0–2,越小越稳定;仅自定义端点)
+      <input type="number" id="temperature" min="0" max="2" step="0.1" value="0.2" />
+    </label>
+    <label>批量并发数(1–20)
+      <input type="number" id="concurrency" min="1" max="20" value="6" />
+    </label>
     <label class="check">
       <input type="checkbox" id="showOriginal" />
       译文上方同时显示原文小字(默认关)
@@ -71,6 +92,7 @@
   </div>
 
   <script src="langs.js"></script>
+  <script src="prompts.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

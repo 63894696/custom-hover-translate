@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>replace-framework-test</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  .hero { display: flex; gap: 24px; border: 1px dashed #999; padding: 12px; }
+  .hero .col { flex: 1; }
+  p { margin: 8px 0; }
+</style></head>
+<body>
+  <!-- 模拟用户截图1:页首"导航+导语"多文本容器(div.hero 含多个 <p> 和两个分栏 col) -->
+  <div class="hero">
+    <div class="col">
+      <p>Welcome to our community chat platform for everyone.</p>
+      <p>Please read the rules before posting your first message.</p>
+    </div>
+    <div class="col">
+      <p>Stay respectful and keep conversations on topic daily.</p>
+      <p>Moderators are here to help you whenever you need them.</p>
+    </div>
+  </div>
+
+  <!-- 正文叶子段 -->
+  <p id="leaf1">This is a standalone paragraph with enough text to translate.</p>
+  <p id="leaf2">Another independent paragraph that should become Chinese text.</p>
+
+  <!-- 单文本 div(叶子度=1,replace 可以替它) -->
+  <div id="singlediv">A single text node inside a div element here.</div>
+
+  <!-- 段内夹链接(中英穿插回归用例):replace 应整段顶替、链接结构保留 -->
+  <p id="withlink">Read the <a href="#x">full documentation</a> before you start.</p>
+
+  <script>
+    // ---- stub 最小 chrome API,让 content.js 能在页面里跑 ----
+    window.__sentMessages = [];
+    window.chrome = {
+      storage: {
+        local: { get: async () => ({}), set: async () => {}, remove: () => {} },
+        onChanged: { addListener: () => {} },
+      },
+      runtime: {
+        sendMessage: async (msg) => {
+          window.__sentMessages.push(msg && msg.type);
+          if (msg && msg.type === 'translate-batch') {
+            return { ok: true, provider: 'stub', model: 'm1', durationMs: 1,
+              results: msg.items.map((it, i) => ({ id: String(i), ok: true, text: '【译】' + it.text })) };
+          }
+          if (msg && msg.type === 'translate') {
+            return { ok: true, text: '【译】' + msg.text, provider: 'stub', model: 'm1' };
+          }
+          return { ok: true };
+        },
+        onMessage: { addListener: (fn) => { window.__ctOnMessage = fn; } },
+      },
+    };
+  </script>
+  <!-- 真实 content.js(由 serve.py 从 extension/src 托管) -->
+  <script src="/content.js"></script>
+</body></html>

@@ -2,8 +2,8 @@
 // 2026-08-11 重构:不再强制本地 Node 后端;默认引擎扩展内直连(google_gtx 免 key / 用户自定义
 // OpenAI 兼容端点),本地后端降级为可选高级项。单例 in-flight:同 key 并发只发一次请求。
 
-// MV3 classic service worker:用 importScripts 引入内置引擎。
-try { importScripts('engines.js'); } catch (e) { console.warn('[CT] import engines.js failed', e); }
+// MV3 classic service worker:用 importScripts 引入内置引擎 + 语言清单。
+try { importScripts('engines.js', 'langs.js'); } catch (e) { console.warn('[CT] import engines/langs failed', e); }
 
 const TIMEOUT_MS = 30000;
 
@@ -172,7 +172,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   const cur = await chrome.storage.local.get(['enabled', 'dstLang', 'showOriginal', 'engine']);
   const patch = {};
   if (cur.enabled === undefined) patch.enabled = true;
-  if (!cur.dstLang) patch.dstLang = 'zh';
+  if (!cur.dstLang) patch.dstLang = self.CT_LANGS.guessTargetLang(); // 默认按系统语言
   if (cur.showOriginal === undefined) patch.showOriginal = false;
   if (!cur.engine) patch.engine = 'auto'; // 默认自动探测,不预设厂商
   if (Object.keys(patch).length) await chrome.storage.local.set(patch);
@@ -208,8 +208,8 @@ function buildContextMenu() {
   chrome.contextMenus.removeAll(() => {
     // 用 navigator.language 推断目标语言(用户在 options 页改的 dstLang 优先)
     chrome.storage.local.get(['dstLang'], (s) => {
-      const dstLang = s.dstLang || guessTargetLang();
-      const label = `翻译为 ${langDisplayName(dstLang)}`;
+      const dstLang = s.dstLang || self.CT_LANGS.guessTargetLang();
+      const label = `翻译为 ${self.CT_LANGS.langDisplayName(dstLang)}`;
       chrome.contextMenus.create({
         id: 'translate-selection',
         title: label,
@@ -217,23 +217,6 @@ function buildContextMenu() {
       });
     });
   });
-}
-
-function guessTargetLang() {
-  const lang = (navigator.language || 'en').toLowerCase();
-  if (lang.startsWith('zh')) return 'zh';
-  if (lang.startsWith('ja')) return 'ja';
-  if (lang.startsWith('ko')) return 'ko';
-  if (lang.startsWith('fr')) return 'fr';
-  if (lang.startsWith('de')) return 'de';
-  return 'zh'; // 默认中文(本扩展主要面向中文用户)
-}
-
-function langDisplayName(code) {
-  return {
-    zh: '中文', en: 'English', ja: '日文', ko: '韩文',
-    fr: '法文', de: '德文', es: '西班牙文',
-  }[code] || code;
 }
 
 chrome.runtime.onInstalled.addListener(() => buildContextMenu());

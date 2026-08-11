@@ -648,7 +648,7 @@
   let enabled = true; // 内容脚本开关(false = 完全停用翻译,默认 true)
   // hoverEnabled 已废弃(原 hover 功能,observer 现已自动覆盖菜单展开跟进)
   let debounceMs = 80; // 已废弃(原 hover debounce,保留兼容)
-  let dstLang = 'zh';
+  let dstLang = self.CT_LANGS ? self.CT_LANGS.guessTargetLang() : 'zh'; // 未读到设置前的瞬时默认;loadSettings 会用存储值覆盖
   let showOriginal = false;
   let observer = null;
   // 鼠标最近位置(只为右键翻译气泡定位,不做任何 hover 触发)
@@ -681,7 +681,7 @@
     if (changes.debounceMs) {
       debounceMs = Math.max(0, Math.min(500, changes.debounceMs.newValue || 80));
     }
-    if (changes.dstLang) dstLang = changes.dstLang.newValue || 'zh';
+    if (changes.dstLang) dstLang = changes.dstLang.newValue || (self.CT_LANGS ? self.CT_LANGS.guessTargetLang() : 'zh');
     if (changes.showOriginal) showOriginal = !!changes.showOriginal.newValue;
     // activeMode 变化(popup 切换模式时):如果非 null,当前页立刻重跑
     if (changes.activeMode) {
@@ -1187,7 +1187,7 @@
     header.className = 'ct-toast-header';
     const title = document.createElement('span');
     title.className = 'ct-toast-title';
-    title.textContent = '翻译结果 · ' + (dstLang === 'zh' ? '中' : dstLang);
+    title.textContent = '翻译结果 · ' + (dstLang === 'zh' ? '中' : (self.CT_LANGS ? self.CT_LANGS.langDisplayName(dstLang) : dstLang));
     const close = document.createElement('span');
     close.className = 'ct-toast-close';
     close.textContent = '✕';

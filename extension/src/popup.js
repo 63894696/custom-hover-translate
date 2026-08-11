@@ -228,8 +228,10 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 // ---------- 初始化 ----------
 document.addEventListener('DOMContentLoaded', async () => {
+  CT_LANGS.fillLangSelect($('dstLang'));
   const s = await chrome.storage.local.get(['dstLang', 'engine', 'activeMode', 'baseURL', 'model', 'apiKey', 'endpoint']);
-  if (s.dstLang) $('dstLang').value = s.dstLang;
+  // 未设过目标语言 → 按系统语言推断(仅写 UI,不落盘;落盘由 onInstalled 或用户选择触发)
+  $('dstLang').value = s.dstLang || CT_LANGS.guessTargetLang();
   const eng = s.engine || 'auto';
   const er = document.querySelector(`input[name="engine"][value="${eng}"]`);
   if (er) er.checked = true;

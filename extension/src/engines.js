@@ -34,7 +34,7 @@ async function detectEngine(force = false) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
     // 用一个极小的 gtx 请求探测(比 HEAD 更可靠,某些网络 HEAD 被拦)
-    const u = `${GTX_URL}?client=gtx&sl=en&tl=zh-CN&dt=t&q=hi`;
+    const u = `${GTX_URL}?client=gtx&sl=en&tl=zh&dt=t&q=hi`;
     const r = await fetch(u, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
     clearTimeout(t);
     if (r.ok) detected = 'google_gtx';
@@ -72,7 +72,7 @@ async function callGoogleGtx({ text, srcLang, dstLang }) {
   const params = new URLSearchParams({
     client: 'gtx',
     sl: srcLang || 'auto',
-    tl: dstLang || 'zh-CN',
+    tl: dstLang || 'zh',
     dt: 't',
     q: text,
   });

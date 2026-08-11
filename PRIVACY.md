@@ -11,6 +11,8 @@
 - 翻译内容不经过任何第三方(除非用户主动在设置中配置了非 localhost 的 endpoint)
 
 > **自定义端点 / AI 角色 / 测试服务(v2026.08 新增)**:当你选用"自定义端点(OpenAI 兼容)"并填入自己的 API Key 时,翻译文本(含 AI 角色提示词、术语表)将**仅在你本机 ↔ 你填的端点之间**传输。Key、角色、术语、温度、并发等全部仅存于本机 `chrome.storage.local`。点"测试服务"只向你填的端点发一条 "Hello" 探活,不发往任何第三方。内置的 `_ct_log` 诊断环(最多 100 条,本机)只记录 引擎/模型/错误码/HTTP 状态/耗时/文本长度,**绝不记录文本内容**。
+>
+> **视频字幕 / 图片翻译(v2026.08 新增)**:视频双语字幕只把**字幕轨文本**、图片右键翻译只把**图相关文本**(alt/title/aria-label/figcaption/相邻说明)发给你配置的引擎(内置 Google 或你的自定义端点)——与网页文字翻译同一条路径、同一套隐私约束。**图片翻译不做像素级 OCR**:不截图、不上传图片像素。YouTube 字幕轨的抓取经由扩展 background 进程代取(仅 `youtube.com/api/timedtext`,带浏览器 cookie 以通过其授权校验),**不代理其它任何请求**,字幕内容不落盘、不上传第三方。
 
 ## 数据存储
 
@@ -21,6 +23,7 @@
 | 用户配置的 LLM provider / model / API key | 用于翻译请求 |
 | 后端 endpoint URL / 自定义端点 Base URL | 翻译请求的目标地址 |
 | AI 角色 `promptRole` / 术语表 `termsText` / 温度 / 并发 | 自定义端点的翻译策略(仅本机) |
+| 视频字幕 / 图片翻译开关与模式(`subtitlesEnabled`/`subtitleMode`/`imageTranslateEnabled` 等) | 功能偏好(仅本机) |
 | 翻译缓存(段落 + 译文) | 避免重复翻译同一文本,加速体验 |
 | `activeMode`(当前翻译模式) | "整页双语对照"或"整页仅译文" |
 | `_ct_log` 诊断环(≤100 条) | 仅引擎/模型/错误码/HTTP 状态/耗时/长度,无文本内容 |
@@ -37,7 +40,8 @@
 | `activeTab` | 当前活跃标签页的访问权限(右键翻译选中文本需要) |
 | `scripting` | 在需要时动态注入 content script(如新打开 tab content script 还未就绪) |
 | `webNavigation` | 监听 SPA 路由变化(GitHub Issues / React 应用等),切换页面后自动翻译 |
-| `contextMenus` | 在右键菜单添加"翻译为 XXX"项 |
+| `contextMenus` | 在右键菜单添加"翻译为 XXX"项 + "翻译图片文字信息"项 |
+| `host_permissions: youtube.com` | 视频双语字幕:读取 YouTube 字幕轨(timedtext)。仅用于字幕功能,不读取/修改其它 YouTube 数据 |
 
 扩展**不会**:
 - 上传浏览历史

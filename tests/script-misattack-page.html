@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>script-misattack-test</title></head>
+<body>
+  <h1>Script 误伤复现页(模仿 Reddit faceplate-loader 数据岛)</h1>
+
+  <!-- 场景还原:Reddit 把 <script> 数据岛挂在可见导航 span 的 DOM 子树里(非 display:none)。
+       我们扫描器用 el.innerText || el.textContent 判块文本,把 script 内容算进去 → 误选为翻译块,
+       翻译时把 SML.load(...) 代码当正文译出显示。 -->
+
+  <!-- 误伤区:可见 span + 内部藏 script 数据岛。
+       关键:Reddit 的 faceplate-loader 会把 <script> 用 CSS 显示成可见(display:block),
+       导致 innerText 也包含 script 代码 → 扫描器 extractText 误选为翻译块。
+       这里用 style 强制 script 可见来还原该场景。 -->
+  <style>
+    /* 模仿 Reddit:让 script 数据岛可见,使 innerText 包含其代码 */
+    #nav-bar script { display: block; white-space: pre-wrap; }
+  </style>
+  <div id="nav-bar">
+    <span id="misattack-span" class="flex items-center ps-xs">Menu<script>window.__data_island = "SML.load([\"1e8A-A2dDH\",\"2dnUEF49Nx\",\"2Eg26W1Z2s2\",\"3g8fkQf2r5\"], 'zh-CN/', 'auto');";</script></span>
+    <span id="misattack-span2">Settings<script type="application/json">{"modules":["D7oMTNFVLj","1WvzIGGFbP","2dnUEF49Nx"],"locale":"auto"}</script></span>
+  </div>
+
+  <!-- 对照:正常段落,必须正常翻译(回归,确保修复不误杀正文) -->
+  <p id="normal-para">This is a normal paragraph that must be translated correctly.</p>
+
+  <!-- 对照:含 code/pre 的技术段落,按 STAY_ORIGINAL 规则本就该跳过(回归) -->
+  <pre id="code-block">const x = SML.load(["abc"]); // 这是真代码,不该翻译</pre>
+
+  <script>
+    window.__sentMessages = [];
+    window.chrome = {
+      storage: {
+        local: { get: async () => ({}), set: async () => {}, remove: () => {} },
+        onChanged: { addListener: () => {} },
+      },
+      runtime: {
+        sendMessage: async (msg) => {
+          window.__sentMessages.push(msg && msg.type);
+          if (msg && msg.type === 'translate-batch') {
+            return { ok: true, provider: 'stub', model: 'm1', durationMs: 1,
+              results: msg.items.map((it, i) => ({ id: String(i), ok: true, text: '【译】' + it.text })) };
+          }
+          if (msg && msg.type === 'translate') {
+            return { ok: true, text: '【译】' + msg.text, provider: 'stub', model: 'm1' };
+          }
+          return { ok: true };
+        },
+        onMessage: { addListener: (fn) => { window.__ctOnMessage = fn; } },
+      },
+    };
+  </script>
+  <script src="/content.js"></script>
+</body></html>

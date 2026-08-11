@@ -2,8 +2,9 @@
 // 2026-08-11 重构:不再强制本地 Node 后端;默认引擎扩展内直连(google_gtx 免 key / 用户自定义
 // OpenAI 兼容端点),本地后端降级为可选高级项。单例 in-flight:同 key 并发只发一次请求。
 
-// MV3 classic service worker:用 importScripts 引入内置引擎 + 语言清单。
-try { importScripts('engines.js', 'langs.js'); } catch (e) { console.warn('[CT] import engines/langs failed', e); }
+// MV3 classic service worker:用 importScripts 引入内置引擎 + 语言清单 + 角色提示词。
+// 顺序:prompts 必须在 engines 前(engines 的 buildTranslatePrompt 依赖 CT_PROMPTS)。
+try { importScripts('langs.js', 'prompts.js', 'engines.js'); } catch (e) { console.warn('[CT] import langs/prompts/engines failed', e); }
 
 const TIMEOUT_MS = 30000;
 
@@ -132,17 +133,53 @@ async function handleTranslateBatch({ items = [], dstLang = '', concurrency = 6 
   const finalDst = dstLang || stored || 'zh';
   const conc = Math.max(1, Math.min(20, Number(concurrency) || 6));
 
+  // 规范化每条
+  const norm = items.map((it) => {
+    const text = it && it.text != null ? it.text : (typeof it === 'string' ? it : '');
+    const id = (it && (it.id != null ? it.id : it.key)) || '';
+    const srcLang = (it && it.srcLang) || '';
+    return { id, text, srcLang };
+  });
+
+  // C 步:先试 %% 多段批量(openai_compat 且角色 batchOK),一次请求拿全部;
+  // 失败(切回条数不符/网络/非批量角色)→ 回退逐条并发,结果契约完全一致。
+  if (norm.length >= 2) {
+    try {
+      const br = await self.CT_ENGINES.engineTranslateBatch({
+        texts: norm.map((x) => x.text),
+        srcLang: norm[0].srcLang || '',
+        dstLang: finalDst,
+      });
+      if (br && br.ok && Array.isArray(br.parts) && br.parts.length === norm.length) {
+        const results = norm.map((x, i) => ({
+          id: x.id, ok: true, text: br.parts[i] || '', error: null, provider: br.provider, model: br.model,
+        }));
+        const usedByProvider = {}; usedByProvider[(br.provider || 'engine') + '/' + (br.model || '?')] = norm.length;
+        return {
+          ok: true, needConfig: false, results,
+          success: norm.length, fail: 0, total: norm.length,
+          usedByProvider,
+          lastResp: { provider: br.provider, model: br.model, durationMs: br.durationMs, batched: true, count: br.count },
+        };
+      }
+      if (br && !br.ok && !br.retryable && br.error !== 'batch_split_mismatch' && br.error !== 'too_few'
+          && br.error !== 'not_openai_compat' && br.error !== 'role_no_batch' && br.error !== 'no_prompts') {
+        // 明确的服务端错误(如 4xx 配置问题)→ 记日志,仍回退逐条由逐条再报错
+        logFailure(br.provider || 'engine', br.model || '', br, norm.join('').length);
+      }
+    } catch (e) {
+      console.warn('[CT] %% batch 异常,回退逐条', e);
+    }
+  }
+
+  // 回退:逐条并发(原逻辑)
   let success = 0, fail = 0;
   const usedByProvider = {};
   let lastResp = null;
   let needConfig = false;
 
-  const results = await mapLimit(items, conc, async (it) => {
-    const text = it && it.text != null ? it.text : (typeof it === 'string' ? it : '');
-    // content.js 用 id 匹配结果(也可能是 key,做个兼容)
-    const id = (it && (it.id != null ? it.id : it.key)) || '';
-    const srcLang = (it && it.srcLang) || '';
-    const r = await self.CT_ENGINES.engineTranslate({ text, srcLang, dstLang: finalDst });
+  const results = await mapLimit(norm, conc, async (it) => {
+    const r = await self.CT_ENGINES.engineTranslate({ text: it.text, srcLang: it.srcLang, dstLang: finalDst });
     if (r.needConfig) needConfig = true;
     if (r && r.ok) {
       success++;
@@ -151,9 +188,9 @@ async function handleTranslateBatch({ items = [], dstLang = '', concurrency = 6 
       lastResp = r;
     } else {
       fail++;
-      if (r && !r.needConfig) logFailure(r.provider || 'engine', r.model || '', r, (text || '').length);
+      if (r && !r.needConfig) logFailure(r.provider || 'engine', r.model || '', r, (it.text || '').length);
     }
-    return { id, ok: !!(r && r.ok), text: (r && r.text) || '', error: (r && r.error) || null, provider: r && r.provider, model: r && r.model };
+    return { id: it.id, ok: !!(r && r.ok), text: (r && r.text) || '', error: (r && r.error) || null, provider: r && r.provider, model: r && r.model };
   });
 
   return {
@@ -161,7 +198,7 @@ async function handleTranslateBatch({ items = [], dstLang = '', concurrency = 6 
     needConfig,
     results,
     success, fail,
-    total: items.length,
+    total: norm.length,
     usedByProvider,
     lastResp: lastResp ? { provider: lastResp.provider, model: lastResp.model, durationMs: lastResp.durationMs, fallbackUsed: !!lastResp.fallbackUsed } : null,
   };

@@ -187,7 +187,7 @@
     const out = [];
     // 优先级:真正的段落标签 = 1(最想要);通用容器 div/span/section = 2(退而求其次)
     const LEAF_TAGS = new Set(['P', 'LI', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DD', 'DT', 'FIGCAPTION']);
-    const sel = 'p, li, blockquote, pre, code, h1, h2, h3, h4, h5, h6, dd, dt, figcaption, article, section, [role="article"], div, span';
+    const sel = 'p, li, blockquote, pre, code, h1, h2, h3, h4, h5, h6, dd, dt, figcaption, article, section, [role="article"], div, span, a, button, label, summary';
 
     let nodes;
     try {
@@ -217,9 +217,11 @@
     // 沉浸式翻译风格:节点级 skip
     // 整子树永不翻译的标签
     const NO_TRANSLATE_TAGS = new Set(['SCRIPT','STYLE','TEXTAREA','SVG','NOSCRIPT','TITLE','IFRAME']);
-    // 沉浸式 1.30.2 默认:header/footer/nav 整块 default-translate="no"
-    // → 整个 header/footer/nav 子树永不翻译(GitHub 顶部栏、菜单、footer 全跳过)
-    const NEVER_TRANSLATE_CONTAINERS = ['header', 'footer:last-of-type', 'nav:last-of-type', 'nav'];
+    // 沉浸式 1.30.2 默认:footer/nav 整块 default-translate="no"
+    // → 整个 footer/nav 子树永不翻译(菜单、footer 链接全跳过,避免站点 chrome 噪音)
+    // header 不在此列:很多站点把【正文标题 H1】包在 <header> 里,一刀切会误伤正文标题。
+    // header 改在 isValidNode 里单独处理——放行 H1-H6 标题,跳过其余(按钮/菜单)。
+    const NEVER_TRANSLATE_CONTAINERS = ['footer:last-of-type', 'nav:last-of-type', 'nav'];
     // 沉浸式 1.30.2 additionalStayOriginalSelectors:数学公式、code、编辑器
     const STAY_ORIGINAL_SELECTORS = [
       'span.katex', '.math-block', '.MathJax_Preview', '.MathJax_Display', '.math-container',
@@ -288,6 +290,12 @@
         try { if (n.closest(STAY_ORIGINAL_SELECTORS.join(','))) return false; } catch {}
         // 祖先是我们注入的译文/容器 → 跳过(防译文区域被当候选)
         try { if (n.closest('.ct-bi, .ct-target, .ct-bilingual, .ct-replaced')) return false; } catch {}
+        // header 单独处理(方向A,2026-08-11):放行 H1-H6(很多站点把正文标题包在 header 里),
+        // 跳过 header 里的其余内容(站点 logo/菜单按钮等 chrome)。footer/nav 仍在上面整树跳过。
+        try {
+          const hdr = n.closest('header');
+          if (hdr && !/^[H][1-6]$/.test(n.tagName)) return false;
+        } catch {}
       }
       // class/id 黑名单(GitHub row / metadata 容器)
       const cls = (n.className && n.className.toString) ? n.className.toString() : '';
@@ -677,6 +685,15 @@
         for (const n of nodes) { saved.push(n.nodeValue); n.nodeValue = ''; i++; }
         block.dataset.ctRepl = JSON.stringify(saved);
       }
+      // 幂等:已有 .ct-repl-main 就更新文本,不再插第二个。
+      // 否则"页面加载自动翻译 + activeMode 切换重跑"并发/重复触发时,同一块的
+      // setMainTextBlock 被调两次 → 译文 holder 并排插两个(截图里标题/侧栏"XX XX"重复)。
+      const existing = block.querySelector('.ct-repl-main');
+      if (existing) {
+        existing.textContent = translated;
+        block.classList.add('ct-replaced');
+        return;
+      }
       const holder = document.createElement('span');
       holder.className = 'ct-bi ct-repl-main';
       holder.textContent = translated;
@@ -784,12 +801,13 @@
     if (typeof s.showOriginal === 'boolean') showOriginal = s.showOriginal;
     // activeMode: 用户在 popup 点过任一主按钮 → 后续所有页面/SPA/FAQ 自动跟踪这个模式
     // null/未设 = 关闭自动跟踪(不主动跑整页)
-    autoMode = s.activeMode || s.autoMode || 'bilingual';
+    // 默认 'replace'(仅译文):比双语清爽(用户偏好 2026-08-11)
+    autoMode = s.activeMode || s.autoMode || 'replace';
     autoTranslate = !!s.activeMode;
   }
 
   let autoTranslate = false; // 全局自动翻译开关(用户持久化)
-  let autoMode = 'bilingual'; // 'bilingual' | 'replace'
+  let autoMode = 'replace'; // 'bilingual' | 'replace'(默认仅译文)
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
@@ -803,19 +821,25 @@
     // activeMode 变化(popup 切换模式时):如果非 null,当前页立刻重跑
     if (changes.activeMode) {
       const v = changes.activeMode.newValue;
-      autoMode = v || 'bilingual';
+      autoMode = v || 'replace';
       autoTranslate = !!v;
       if (v && enabled) {
+        // 先清掉旧译文(双语追加的 ct-bi / 仅译文的 ct-replaced),再按新模式重跑。
+        // 否则双语→仅译文切换时,旧的双语 <span class=ct-bi> 还留在页面上,
+        // 新的仅译文又顶替一遍 → 两种译文叠加,且 observer 跟进放大(#13 根因)。
         setTimeout(() => {
-          if (autoMode === 'replace') translateAllReplace();
-          else translateAll();
+          try { removeAll(); } catch (e) {}
+          setTimeout(() => {
+            if (autoMode === 'replace') translateAllReplace();
+            else translateAll();
+          }, 150);
         }, 100);
       }
     }
     // 兼容老字段
     if (changes.autoTranslate) { /* 忽略,改由 activeMode 驱动 */ }
     if (changes.autoMode && !changes.activeMode) {
-      autoMode = changes.autoMode.newValue === 'replace' ? 'replace' : 'bilingual';
+      autoMode = changes.autoMode.newValue === 'bilingual' ? 'bilingual' : 'replace';
     }
   });
 
@@ -873,6 +897,10 @@
   // 展开后才该翻;整页翻译走 collectBlocks 不需要这道。
   function scanAndAutoTranslate() {
     if (!enabled) return;
+    // 还原/关闭自动跟踪后(activeMode=null → autoTranslate=false),observer 不得再重扫。
+    // 否则用户点「还原」清掉译文 → 块上的 ctOrig/ct-replaced 标记被清 → observer 一触发
+    // 又把刚还原的块重译回去(#13 根因:还原被自动检测覆盖)。
+    if (!autoTranslate) return;
     try {
       const blocks = scanAllBlocks({ minChars: 4, maxChars: 1500, mode: autoMode === 'replace' ? 'replace' : 'bilingual' });
       let n = 0;

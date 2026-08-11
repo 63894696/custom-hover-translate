@@ -86,7 +86,7 @@ async function redetect() {
 
 // ---------- 一档:翻译此页 ----------
 async function runTranslate() {
-  const mode = document.querySelector('input[name="mode"]:checked')?.value || 'bilingual';
+  const mode = document.querySelector('input[name="mode"]:checked')?.value || 'replace';
   const btn = $('translate-all');
   btn.disabled = true;
   btn.textContent = '翻译中…';
@@ -152,7 +152,7 @@ document.querySelectorAll('input[name="engine"]').forEach((r) => r.addEventListe
 
 $('save-adv').addEventListener('click', async () => {
   const engine = document.querySelector('input[name="engine"]:checked')?.value || 'auto';
-  const mode = document.querySelector('input[name="mode"]:checked')?.value || 'bilingual';
+  const mode = document.querySelector('input[name="mode"]:checked')?.value || 'replace';
   const payload = { engine, activeMode: mode };
   const baseURL = $('baseURL').value.trim();
   const model = $('model').value.trim();
@@ -235,7 +235,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const eng = s.engine || 'auto';
   const er = document.querySelector(`input[name="engine"][value="${eng}"]`);
   if (er) er.checked = true;
-  const mode = s.activeMode || 'bilingual';
+  const mode = s.activeMode || 'replace';
   const mr = document.querySelector(`input[name="mode"][value="${mode}"]`);
   if (mr) mr.checked = true;
   $('baseURL').value = s.baseURL || '';

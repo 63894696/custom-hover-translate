@@ -239,11 +239,13 @@
     // 沉浸式翻译风格:节点级 skip
     // 整子树永不翻译的标签
     const NO_TRANSLATE_TAGS = new Set(['SCRIPT','STYLE','TEXTAREA','SVG','NOSCRIPT','TITLE','IFRAME']);
-    // 沉浸式 1.30.2 默认:footer/nav 整块 default-translate="no"
-    // → 整个 footer/nav 子树永不翻译(菜单、footer 链接全跳过,避免站点 chrome 噪音)
-    // header 不在此列:很多站点把【正文标题 H1】包在 <header> 里,一刀切会误伤正文标题。
-    // header 改在 isValidNode 里单独处理——放行 H1-H6 标题,跳过其余(按钮/菜单)。
-    const NEVER_TRANSLATE_CONTAINERS = ['footer:last-of-type', 'nav:last-of-type', 'nav'];
+    // 【全页翻译,2026-08-11 用户拍板】:页面上任何显示内容都要翻——包括导航 nav 和页脚 footer。
+    //   此前照抄沉浸式"nav/footer 整块 default-translate=no"是误判:实测沉浸式双语对照
+    //   把 PRODUCTS/SOLUTIONS/页脚 GENERAL/COMPANY/TECH 全翻了(用户截图实证),并未跳过导航。
+    //   故不再把 nav/footer 列入永不翻译容器。站点 chrome 噪音(极短 logo/图标)由
+    //   minChars / looksLikeMetadata / STAY_ORIGINAL 等常规规则过滤,不靠容器级硬跳过。
+    // header 同理不在此列(H1-H6 正文标题常包在 header 里),在 isValidNode 单独放行标题。
+    const NEVER_TRANSLATE_CONTAINERS = [];
     // 沉浸式 1.30.2 additionalStayOriginalSelectors:数学公式、code、编辑器
     const STAY_ORIGINAL_SELECTORS = [
       'span.katex', '.math-block', '.MathJax_Preview', '.MathJax_Display', '.math-container',
@@ -312,12 +314,9 @@
         try { if (n.closest(STAY_ORIGINAL_SELECTORS.join(','))) return false; } catch {}
         // 祖先是我们注入的译文/容器 → 跳过(防译文区域被当候选)
         try { if (n.closest('.ct-bi, .ct-target, .ct-bilingual, .ct-replaced')) return false; } catch {}
-        // header 单独处理(方向A,2026-08-11):放行 H1-H6(很多站点把正文标题包在 header 里),
-        // 跳过 header 里的其余内容(站点 logo/菜单按钮等 chrome)。footer/nav 仍在上面整树跳过。
-        try {
-          const hdr = n.closest('header');
-          if (hdr && !/^[H][1-6]$/.test(n.tagName)) return false;
-        } catch {}
+        // 【全页翻译】header 不再特殊跳过:导航按钮/菜单(PRODUCTS/SOLUTIONS 等)也要翻。
+        //   此前"header 里只放行 H1-H6、跳过其余"会漏掉导航按钮,与全页翻译目标冲突,已移除。
+        //   站点 logo/极短图标等由 minChars/looksLikeMetadata 常规规则过滤。
       }
       // class/id 黑名单(GitHub row / metadata 容器)
       const cls = (n.className && n.className.toString) ? n.className.toString() : '';
@@ -393,10 +392,14 @@
     for (const c of candidates) {
       if (chosen.has(c.n) || blocked.has(c.n)) continue;
       if (isInsideChosen(c.n)) { blocked.add(c.n); continue; }
-      if (c.priority === 2) {
-        // 两模式都只排除"含块级子的大容器";叶子型容器(无块级子)bilingual/replace 都入选
-        if (hasBlockChild(c.n)) { blocked.add(c.n); continue; }
-      }
+      // 含块级子的容器【任何 priority、任何模式】都不整体选(#19 导航死结修复):
+      //   它不是"叶子文本块"——整体选后 replace 会顶平子结构、bilingual 会把译文塞到所有
+      //   子块之后(位置错乱);更糟的是它被选后 setMainTextBlock/appendBilingual 又因
+      //   hasBlockLevelChild 拒替,自己翻不成还 chosen 占位、把后代叶子(导航 BUTTON/链接)
+      //   全阻断陪葬(RumbleTalk nav:LI 含 2 个 DIV 子,priority 0 先被选 → 拒替 →
+      //   PRODUCTS/SOLUTIONS/RESOURCES 按钮 + 6 个下拉链接全漏)。
+      //   不整体选 → 其叶子后代各自被选取翻译,结构/位置都正确。
+      if (hasBlockChild(c.n)) { blocked.add(c.n); continue; }
       // 选中它:占用它的整个子树(后代不再单独选),并阻断祖先链
       // (子块先选后,容器祖先若再被选会"吃掉"子块 → 子块双重翻译/被顶替)
       chosen.add(c.n);

@@ -2,81 +2,90 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <title>Custom Hover Translate</title>
+  <title>Prisir 翻译</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
   <header>
-    <h1>Custom Hover Translate</h1>
-    <p class="sub">OpenAI 兼容后端 · 多 provider 热切</p>
+    <h1>翻译此页</h1>
+    <p class="sub">免注册 · 密钥仅存本机</p>
   </header>
 
-  <!-- 大按钮:核心功能,沉浸式翻译插件的主打 -->
+  <!-- 一档:零配置核心操作 -->
   <section class="hero">
-    <button id="translate-all" class="hero-btn">整页双语对照</button>
-    <button id="replace-all" class="hero-btn alt">整页仅译文</button>
-    <button id="toggle-mode" class="hero-secondary toggle">↔ 切换(双语 ↔ 仅译文)</button>
-    <button id="remove-all" class="hero-secondary">移除所有译文</button>
-    <div id="hero-status" class="hero-status">点上方任一按钮 = 整页翻译 + 全局自动跟踪(FAQ/SPA 跟进)。点「切换」一键互换模式。</div>
+    <button id="translate-all" class="hero-btn">翻译此页</button>
+    <button id="remove-all" class="hero-secondary">还原</button>
+    <div class="lang-row">
+      <label for="dstLang">翻译成</label>
+      <select id="dstLang">
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+        <option value="ja">日文</option>
+        <option value="ko">韩文</option>
+        <option value="fr">法文</option>
+        <option value="de">德文</option>
+      </select>
+    </div>
+    <div id="hero-status" class="hero-status">点「翻译此页」= 整页双语对照,后续新内容自动跟进。</div>
   </section>
 
+  <!-- 状态:人话化 -->
   <section class="status">
-    <div class="led" id="led" title="后端健康状态"></div>
+    <div class="led" id="led"></div>
     <div class="status-text">
-      <div id="status-line">检查中…</div>
+      <div id="status-line">检测中…</div>
       <div id="status-meta" class="muted"></div>
+      <div id="status-action"></div>
     </div>
   </section>
 
-  <!-- Fallback 链:主用档用尽时自动切下一档;手动按钮跳过当前 -->
-  <section class="fallback">
-    <div class="fb-head">
-      <span class="fb-title">Fallback 链</span>
-      <label class="switch">
-        <input type="checkbox" id="fb-enabled" />
-        <span class="slider"></span>
-      </label>
+  <!-- 三档:高级设置(默认折叠) -->
+  <details class="advanced" id="advanced">
+    <summary>高级设置</summary>
+
+    <div class="adv-group">
+      <label class="adv-label">翻译引擎</label>
+      <label class="radio"><input type="radio" name="engine" value="auto" /> 自动(推荐:能连 Google 用内置,否则用下方自定义)</label>
+      <label class="radio"><input type="radio" name="engine" value="google_gtx" /> 内置翻译(Google,免 Key)</label>
+      <label class="radio"><input type="radio" name="engine" value="openai_compat" /> 自定义端点(OpenAI 兼容)</label>
+      <label class="radio"><input type="radio" name="engine" value="local_backend" /> 本地后端(进阶,Ollama/缓存)</label>
     </div>
-    <div id="fb-chain" class="fb-chain"></div>
-    <div class="fb-buttons">
-      <button id="fb-prev" class="fb-btn">◀ 上一档</button>
-      <button id="fb-next" class="fb-btn primary">下一档 ▶</button>
+
+    <div class="adv-group" id="custom-config">
+      <label class="adv-label">自定义端点配置</label>
+      <input type="text" id="baseURL" placeholder="API Base URL,如 https://api.example.com/v1" />
+      <div class="model-row">
+        <input type="text" id="model" list="model-list" placeholder="模型名(可先点右侧拉取列表)" />
+        <datalist id="model-list"></datalist>
+        <button id="fetch-models" class="link-btn" type="button">拉取模型列表</button>
+      </div>
+      <input type="password" id="apiKey" placeholder="API Key(仅存本机)" autocomplete="off" />
+      <p class="hint" id="fetch-models-hint">填好 URL 和 Key 后点「拉取模型列表」,从下拉框选,免手输。</p>
+      <p class="hint">不知道该选哪个模型?<a href="#" id="open-leaderboard">看看模型翻译能力评测 →</a></p>
     </div>
-    <div id="fb-last" class="muted fb-last"></div>
-  </section>
 
-  <section class="row">
-    <label for="provider">Provider</label>
-    <select id="provider"></select>
-  </section>
+    <div class="adv-group" id="backend-config">
+      <label class="adv-label">本地后端地址</label>
+      <input type="text" id="endpoint" placeholder="http://127.0.0.1:12308" />
+      <p class="hint">仅在选「本地后端」时生效,需自行启动后端进程。</p>
+    </div>
 
-  <section class="row">
-    <label for="model">Model(留空用 provider 默认)</label>
-    <input type="text" id="model" placeholder="例如 qwen3.7-max-2026-06-08" />
-  </section>
+    <div class="adv-group">
+      <label class="adv-label">显示模式</label>
+      <label class="radio"><input type="radio" name="mode" value="bilingual" /> 双语对照</label>
+      <label class="radio"><input type="radio" name="mode" value="replace" /> 仅译文</label>
+    </div>
 
-  <section class="row buttons">
-    <button id="apply">应用 Provider / Model</button>
-  </section>
-
-  <section class="row buttons small">
-    <button id="copy-cmd">复制启动命令</button>
-    <button id="open-options">打开设置</button>
-    <button id="clear-cache">清缓存</button>
-  </section>
-
-  <section class="external-tool">
-    <button id="open-pdf-translator" class="external-btn">
-      <span class="ext-icon">📄</span>
-      <span class="ext-text">
-        <span class="ext-title">翻译 PDF / 文档</span>
-        <span class="ext-sub">在新标签打开 pdftranslator.org · 免费 1000 页/月 · 无需注册</span>
-      </span>
-    </button>
-  </section>
+    <div class="adv-actions">
+      <button id="save-adv" class="primary">保存高级设置</button>
+      <button id="redetect" class="hero-secondary">重新检测网络</button>
+    </div>
+    <div id="adv-msg" class="hint"></div>
+  </details>
 
   <footer>
     <span id="last-info" class="muted"></span>
+    <button id="open-options" class="link-btn">更多设置</button>
   </footer>
 
   <script src="popup.js"></script>

@@ -2,54 +2,51 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <title>Custom Hover Translate — 设置</title>
+  <title>Prisir 翻译 — 设置</title>
   <link rel="stylesheet" href="options.css" />
 </head>
 <body>
-  <h1>Custom Hover Translate — 设置</h1>
-  <p class="lead">所有设置保存在 <code>chrome.storage.local</code>。后端优先,.env 默认值即可工作;这里只是临时覆盖。</p>
+  <h1>翻译 — 设置</h1>
+  <p class="lead">所有设置保存在本机(<code>chrome.storage.local</code>),不上传、不收集翻译内容。绝大多数用户无需改动本页。</p>
 
   <fieldset>
-    <legend>后端连接</legend>
-    <label>Endpoint URL
+    <legend>翻译引擎</legend>
+    <label class="radio"><input type="radio" name="engine" value="auto" /> <strong>自动(推荐)</strong> — 能连 Google 用内置免 Key 翻译,否则用下方自定义端点</label>
+    <label class="radio"><input type="radio" name="engine" value="google_gtx" /> 内置翻译(Google,免 Key)— 需能访问 Google</label>
+    <label class="radio"><input type="radio" name="engine" value="openai_compat" /> 自定义端点(OpenAI 兼容)— 自己选模型厂商,填端点 + Key</label>
+    <label class="radio"><input type="radio" name="engine" value="local_backend" /> 本地后端(进阶)— 本机 Ollama / 缓存 / 批量节流</label>
+    <p class="hint">我们不预设任何国内或海外厂商。选「自定义端点」即可接入任何 OpenAI 兼容的翻译服务。<a href="https://prisir.example.com/translate-models" target="_blank" rel="noopener">不知道选哪个?看模型翻译能力评测 →</a></p>
+  </fieldset>
+
+  <fieldset id="custom-fieldset">
+    <legend>自定义端点(选「自定义端点」时填)</legend>
+    <label>API Base URL
+      <input type="text" id="baseURL" placeholder="https://api.example.com/v1" />
+    </label>
+    <label>模型名(Model)
+      <span class="model-row">
+        <input type="text" id="model" list="model-list" placeholder="填好 URL+Key 后点右侧拉取,免手输" />
+        <datalist id="model-list"></datalist>
+        <button id="fetch-models" type="button" class="mini">拉取模型列表</button>
+      </span>
+    </label>
+    <label>API Key(仅存本机)
+      <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off" />
+    </label>
+    <p class="hint" id="fetch-models-hint">任何 OpenAI 兼容(Chat Completions)的服务都可接入。Key 只保存在本机。</p>
+  </fieldset>
+
+  <fieldset id="backend-fieldset">
+    <legend>本地后端(选「本地后端」时填)</legend>
+    <label>后端地址
       <input type="text" id="endpoint" placeholder="http://127.0.0.1:12308" />
     </label>
-    <p class="hint">默认 <code>http://127.0.0.1:12308</code>(与 backend/.env 中 PORT 一致)。</p>
-  </fieldset>
-
-  <fieldset>
-    <legend>Provider / Model / API Key(可选覆盖)</legend>
-    <label>Provider
-      <select id="provider">
-        <option value="">(不覆盖,走后端默认)</option>
-        <option value="minimax">MiniMax (MiniMax-M3)</option>
-        <option value="deepseek">DeepSeek (deepseek-chat)</option>
-        <option value="openai">OpenAI (gpt-4o-mini)</option>
-        <option value="qwen-mt">Qwen MT (qwen-mt)</option>
-        <option value="ollama">Ollama (本机,无需 key)</option>
-        <option value="custom">Custom</option>
-      </select>
-    </label>
-    <label>Model(留空用 provider 默认)
-      <input type="text" id="model" placeholder="例如 gpt-4o-mini" />
-    </label>
-    <label>API Key(留空用后端 .env 或本地 Ollama)
-      <input type="password" id="apiKey" placeholder="sk-...(Google Translate gtx / Ollama 无需 key)" autocomplete="off" />
-    </label>
-    <label>API Base URL(仅 custom 模式用,留空走后端默认)
-      <input type="text" id="baseURL" placeholder="https://api.openai.com/v1" />
-    </label>
-    <p class="hint">保存时同步调后端 <code>/select-provider</code>。Key 存 <code>chrome.storage.local</code>(仅本机可见)。</p>
-  </fieldset>
-
-  <fieldset>
-    <legend>自动翻译(全局)</legend>
-    <p class="hint">点 popup 里的 <strong>「整页双语对照」</strong> 或 <strong>「整页仅译文」</strong> 按钮,即可启用全局跟踪翻译(新页面、FAQ 展开、SPA 路由变化自动跟进)。再点 <strong>「切换」</strong> 按钮可一键在双语/仅译文间切换。无需在此页面配置。</p>
+    <p class="hint">需自行启动后端进程。适合本地模型(Ollama)或需要服务端缓存/节流的进阶场景。</p>
   </fieldset>
 
   <fieldset>
     <legend>翻译行为</legend>
-    <label>目标语言(目前 zh 是唯一模板;选其他会拼到 prompt 提示词)
+    <label>目标语言
       <select id="dstLang">
         <option value="zh">中文(zh)</option>
         <option value="en">英文(en)</option>

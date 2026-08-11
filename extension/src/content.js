@@ -11,6 +11,9 @@
 
 (() => {
   const DEFAULT_ENDPOINT = 'http://127.0.0.1:12308';
+  // 自身注入译文时置 true,MutationObserver 据此忽略,防"注入→触发→重扫→再注入"雪崩。
+  // 声明在 IIFE 顶部,供 appendBilingual/setMainText/ensureObserver 共用。
+  let selfInjecting = false;
   // ============ LRU + cyrb32(内联自 lib/lru.js) ============
   class LRU {
     constructor({ max = 400, ttlMs = 24 * 3600 * 1000 } = {}) {
@@ -230,7 +233,8 @@
     function isValidNode(n) {
       if (!n || n.nodeType !== 1) return true; // 文本节点不算"节点"
       if (NO_TRANSLATE_TAGS.has(n.tagName)) return false;
-      if (n.classList && (n.classList.contains('ct-target') || n.classList.contains('ct-replaced'))) return false;
+      // 我们的译文/容器/已译块,整子树跳过(防译文被当新块)
+      if (n.classList && (n.classList.contains('ct-target') || n.classList.contains('ct-replaced') || n.classList.contains('ct-bilingual') || n.classList.contains('ct-bi'))) return false;
       // 用户明示跳过:notranslate class 或 translate="no" 属性
       if (n.classList && n.classList.contains('notranslate')) return false;
       if (n.getAttribute && n.getAttribute('translate') === 'no') return false;
@@ -244,6 +248,8 @@
       if (n.closest) {
         try { if (n.closest(NEVER_TRANSLATE_CONTAINERS.join(','))) return false; } catch {}
         try { if (n.closest(STAY_ORIGINAL_SELECTORS.join(','))) return false; } catch {}
+        // 祖先是我们注入的译文/容器 → 跳过(防译文区域被当候选)
+        try { if (n.closest('.ct-bi, .ct-target, .ct-bilingual, .ct-replaced')) return false; } catch {}
       }
       // class/id 黑名单(GitHub row / metadata 容器)
       const cls = (n.className && n.className.toString) ? n.className.toString() : '';
@@ -446,31 +452,99 @@
 
   // "仅译文"模式:把主文本节点换成译文(保留其它子元素,继承样式)
   function setMainText(block, textNode, translated) {
-    rememberText(block, textNode);
-    block.classList.add('ct-replaced');
-    textNode.nodeValue = translated;
+    selfInjecting = true;
+    try {
+      rememberText(block, textNode);
+      block.classList.add('ct-replaced');
+      textNode.nodeValue = translated;
+    } finally {
+      setTimeout(() => { selfInjecting = false; }, 0);
+    }
   }
 
   // "双语对照"模式:在主文本节点后追加一个 <br> + <span class="ct-bi">译文</span>。
   // 用 <span> 包住译文,这样 restoreBlock 能精确 querySelectorAll('.ct-bi') 移除。
   // (裸 text node 没有类名,无法用选择器定位——这是之前的 bug。)
   function appendBilingual(block, textNode, translated) {
-    // 先清掉可能存在的旧译文标记(防重复点击)
-    block.querySelectorAll('.ct-bi').forEach((el) => el.remove());
-    rememberText(block, textNode);
-    const br = document.createElement('br');
-    br.className = 'ct-bi';
-    const span = document.createElement('span');
-    span.className = 'ct-bi';
-    span.textContent = translated;
-    if (textNode.nextSibling) {
-      block.insertBefore(br, textNode.nextSibling);
-      block.insertBefore(span, br.nextSibling);
-    } else {
-      block.appendChild(br);
-      block.appendChild(span);
+    selfInjecting = true;
+    try {
+      // 先清掉可能存在的旧译文标记(防重复点击)
+      block.querySelectorAll('.ct-bi').forEach((el) => el.remove());
+      rememberText(block, textNode);
+      const br = document.createElement('br');
+      br.className = 'ct-bi';
+      const span = document.createElement('span');
+      span.className = 'ct-bi';
+      span.textContent = translated;
+      if (textNode.nextSibling) {
+        block.insertBefore(br, textNode.nextSibling);
+        block.insertBefore(span, br.nextSibling);
+      } else {
+        block.appendChild(br);
+        block.appendChild(span);
+      }
+      block.classList.add('ct-bilingual');
+    } finally {
+      // 让 MutationObserver 的 microtask 先排完再解除,确保这次注入被忽略
+      setTimeout(() => { selfInjecting = false; }, 0);
     }
-    block.classList.add('ct-bilingual');
+  }
+
+  // ============ 块级注入(修复"中英穿插"的核心,对齐沉浸式翻译) ============
+  // 旧方案拿块内"单条主文本节点"翻译+注入,一旦段里夹 <a>/<span> 就会把英文链接
+  // 留在原地、译文插到段中 → 中英穿插。新方案:送译文本=整块 extractText(跨内联标签),
+  // 译文作为独立 .ct-target 块附加到原文块末尾(复用其 display:block+左边线样式,字色继承)。
+  function appendBilingualBlock(block, translated) {
+    if (!block || !translated) return;
+    selfInjecting = true;
+    try {
+      // 幂等:同一块不重复附加
+      if (block.querySelector(':scope > .ct-target.ct-done')) { block.classList.add('ct-bilingual'); return; }
+      const el = document.createElement('div');
+      el.className = 'ct-target ct-done';
+      const t = document.createElement('div');
+      t.className = 'ct-translation';
+      t.textContent = translated;
+      el.appendChild(t);
+      block.appendChild(el);
+      block.classList.add('ct-bilingual');
+    } finally {
+      setTimeout(() => { selfInjecting = false; }, 0);
+    }
+  }
+
+  // 仅译文(块级):记录块内全部可译文本节点(含内联 <a>/<span> 里的)到 dataset,
+  // 全部置空后在块首注入译文。这样跨内联标签的整段一起被译文顶替,不再残留英文片段。
+  // restoreBlock 逐个把保存的原文写回,结构上 100% 还原。
+  function setMainTextBlock(block, translated) {
+    if (!block) return;
+    selfInjecting = true;
+    try {
+      if (!block.dataset.ctRepl) {
+        const saved = [];
+        const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','CODE','PRE','TEXTAREA','INPUT','SELECT','KBD','SAMP','VAR']);
+        const tw = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
+          acceptNode(n) {
+            const p = n.parentElement;
+            if (!p || SKIP.has(p.tagName)) return NodeFilter.FILTER_REJECT;
+            if (p.classList && (p.classList.contains('ct-bi') || p.classList.contains('ct-target'))) return NodeFilter.FILTER_REJECT;
+            return ((n.nodeValue || '').trim().length > 0) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+          }
+        });
+        let node; let i = 0;
+        const nodes = [];
+        while ((node = tw.nextNode())) nodes.push(node);
+        for (const n of nodes) { saved.push(n.nodeValue); n.nodeValue = ''; i++; }
+        block.dataset.ctRepl = JSON.stringify(saved);
+      }
+      const holder = document.createElement('span');
+      holder.className = 'ct-bi ct-repl-main';
+      holder.textContent = translated;
+      block.insertBefore(holder, block.firstChild);
+      block.classList.add('ct-replaced');
+    } finally {
+      setTimeout(() => { selfInjecting = false; }, 0);
+    }
   }
 
   // 还原单个块(两种模式都覆盖)。原文在 dataset.ctOrig 里,直接写回:
@@ -480,10 +554,28 @@
   // 是不可能的(原 textNode 已被改写)。改用策略:对 .ct-replaced 块,
   // 取块内"非 .ct-bi 内"的文本节点中最长的,就是被改写的那条,直接写回 ctOrig。
   function restoreBlock(block) {
-    // 1) 移除双语追加的 <br> + <span> 译文
+    // 1) 移除双语追加的 <br>+<span>、块级 .ct-target 译文容器、仅译文占位 span
     block.querySelectorAll('.ct-bi').forEach((el) => el.remove());
-    // 2) 还原 .ct-replaced 块的主文本节点:找块内文本节点(此时已无双语 .ct-bi),
-    //    最长者就是被替换的那条,直接写回原文
+    block.querySelectorAll('.ct-target').forEach((el) => el.remove());
+    // 2) 块级仅译文还原:dataset.ctRepl 存了块内每条文本节点的原文,按序写回
+    if (block.dataset.ctRepl != null) {
+      let saved = [];
+      try { saved = JSON.parse(block.dataset.ctRepl); } catch {}
+      const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','CODE','PRE','TEXTAREA','INPUT','SELECT','KBD','SAMP','VAR']);
+      const tw = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
+        acceptNode(n) {
+          const p = n.parentElement;
+          if (!p || SKIP.has(p.tagName)) return NodeFilter.FILTER_REJECT;
+          if (p.classList && (p.classList.contains('ct-bi') || p.classList.contains('ct-target'))) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT; // 此时非译文文本节点已被置空,全部收进来按序还原
+        }
+      });
+      let node; const nodes = [];
+      while ((node = tw.nextNode())) nodes.push(node);
+      for (let i = 0; i < nodes.length && i < saved.length; i++) nodes[i].nodeValue = saved[i];
+      delete block.dataset.ctRepl;
+    }
+    // 3) 旧版单文本节点仅译文还原(.ct-replaced 且有 ctOrig):最长文本节点写回 ctOrig
     if (block.classList.contains('ct-replaced') && block.dataset.ctOrig != null) {
       let tn = null;
       let bestLen = 0;
@@ -492,7 +584,6 @@
           const v = (child.nodeValue || '').trim();
           if (v.length > bestLen) { tn = child; bestLen = v.length; }
         }
-        // 也要看 inline 包装里的文本(应对 H1><span>...</span> 这种)
         if (child.nodeType === 1 && INLINE_WRAP.has(child.tagName)) {
           for (const grand of child.childNodes) {
             if (grand.nodeType === 3) {
@@ -598,14 +689,28 @@
   //   (c) 跟进"已存在节点从隐藏变可见"(新增 attributes 监听,关键修复 FAQ 展开)
   //   实现策略:mutation 触发后,setTimeout 200ms,扫"可见 + 未翻译"的所有 block,
   //   对每个新可翻译的块走 translateOne。比逐 mutation 精细分析更鲁棒。
+  // 标记:我们自身注入译文时置 true,observer 据此忽略,避免"注入→触发→重扫→再注入"雪崩
+  // (selfInjecting 已在 IIFE 顶部声明)
+
   function ensureObserver() {
     if (observer) return observer;
     observer = new MutationObserver((mutations) => {
+      // 自身注入译文 / 还原译文引起的 DOM 变化 → 不跟进(防雪崩)
+      if (selfInjecting) return;
+      // 若所有 mutation 都发生在我们的译文节点内,也跳过
+      let onlyOurs = true;
+      for (const m of mutations) {
+        const t = m.target;
+        const inOurs = t && t.nodeType === 1 && t.closest && t.closest('.ct-bi, .ct-target');
+        const addedOurs = m.addedNodes && [...m.addedNodes].every((n) => n.nodeType === 1 && n.classList && (n.classList.contains('ct-bi') || n.classList.contains('ct-target')));
+        if (!inOurs && !addedOurs) { onlyOurs = false; break; }
+      }
+      if (onlyOurs) return;
       clearTimeout(observer._t);
       observer._t = setTimeout(() => {
         cleanupOrphans();
         scanAndAutoTranslate();
-      }, 200);
+      }, 250);
     });
     // childList:新增子树
     // attributes:hidden/aria-hidden/aria-expanded/open/style/class 变化(FAQ/SPA 关键)
@@ -620,27 +725,27 @@
     return observer;
   }
 
-  // 扫描全页,找出"目前可见 + 未翻译 + 是 block 标签 + 有主文本节点"的所有块,逐个 translateOne
+  // 扫描全页,找出"目前可见 + 未翻译"的所有可译块,逐个 translateOne。
+  // 复用 scanAllBlocks(含 div/span + 叶子优先防嵌套 + metadata 黑名单),
+  // 不再用旧的简陋白名单——旧选择器漏了 div,导致 FAQ 手风琴答案(包在 <div> 里)
+  // 点开后跟进不到(标题是 h3/summary 能翻,答案 div 漏翻)。
+  // 这里额外补一道 isVisible 过滤:动态跟进特有的需求——FAQ 展开前答案 aria-hidden,
+  // 展开后才该翻;整页翻译走 collectBlocks 不需要这道。
   function scanAndAutoTranslate() {
     if (!enabled) return;
     try {
-      const sel = 'p, li, blockquote, h1, h2, h3, h4, h5, h6, dd, dt, figcaption, article, section, [role="article"]';
-      const nodes = document.querySelectorAll(sel);
+      const blocks = scanAllBlocks({ minChars: 4, maxChars: 1500 });
       let n = 0;
-      for (const el of nodes) {
-        // 跳过已翻译/已替换
+      for (const it of blocks) {
+        const el = it.block;
+        // 跳过已翻译/已替换(自身 + 祖先链任一已译都算,防译文被当新块重译)
         if (el.dataset && (el.dataset.ctOrig != null || el.classList.contains('ct-bilingual'))) continue;
         if (el.classList && el.classList.contains('ct-replaced')) continue;
-        // 可见性:不是 hidden/aria-hidden,不是 display:none
+        // 在我们的译文节点内部,或祖先已是双语/替换块 → 跳过(保守跟进核心)
+        if (el.closest && el.closest('.ct-bi, .ct-target, .ct-bilingual, .ct-replaced')) continue;
+        // 可见性:不是 hidden/aria-hidden,不是 display:none(FAQ 未展开时跳过)
         if (!isVisible(el)) continue;
-        // 没有可翻译的文本节点
-        const tn = getMainTextNode(el);
-        if (!tn) continue;
-        const text = (tn.nodeValue || '').replace(/\s+/g, ' ').trim();
-        if (text.length < 12 || text.length > 1500) continue;
-        if (detectLang(text).tag === dstLang) continue;
-        if (dstLang === 'zh' && isChinese(text)) continue;
-        translateOne(el, text, detectLang(text).tag);
+        translateOne(el, it.text, it.lang);
         n++;
       }
       return n;
@@ -669,12 +774,9 @@
   }
 
   // translateOne:observer 自动跟进 + 单独 hover 触发的单段翻译。
-  // 统一走 text-node 路径(和整页双语/整页仅译文一致),不再建 .ct-target 容器。
-  // 避免同一 block 内出现"原文 + 译文 text node + 老 ct-target div"的重影问题。
-  // 渲染模式由 autoMode 决定(默认双语,避免 hover 时偷偷把原文换成译文)。
+  // 统一走"块级注入"(对齐沉浸式):双语=附加 .ct-target 译文块到原文块末尾;
+  // 仅译文=整块文本替换。不再找单条主文本节点——根治段内夹 <a> 导致的中英穿插。
   async function translateOne(block, text, srcTag) {
-    const tn = getMainTextNode(block);
-    if (!tn) return; // 拿不到主文本节点 → 跳过(observer 早筛过,这里兜底)
     const key = makeKey(text, srcTag);
 
     // 缓存命中 → 直接渲染
@@ -682,9 +784,9 @@
     if (cached) {
       const mode = autoMode || 'bilingual';
       if (mode === 'replace') {
-        if (!block.classList.contains('ct-replaced')) setMainText(block, tn, cached);
+        if (!block.classList.contains('ct-replaced')) setMainTextBlock(block, cached);
       } else {
-        if (!block.classList.contains('ct-bilingual')) appendBilingual(block, tn, cached);
+        if (!block.classList.contains('ct-bilingual')) appendBilingualBlock(block, cached);
       }
       return;
     }
@@ -705,9 +807,9 @@
       cache.set(key, resp.text);
       const mode = autoMode || 'bilingual';
       if (mode === 'replace') {
-        setMainText(block, tn, resp.text);
+        setMainTextBlock(block, resp.text);
       } else {
-        appendBilingual(block, tn, resp.text);
+        appendBilingualBlock(block, resp.text);
       }
     } catch (e) {
       // 静默
@@ -727,29 +829,26 @@
   function collectBlocks(mode /* 'bilingual' | 'replace' */) {
     const blocks = scanAllBlocks({ minChars: 4, maxChars: 1500 });
     const todo = [];
-    let skippedNoTextNode = 0;
     let cached = 0;
     for (const it of blocks) {
-      const tn = getMainTextNode(it.block);
-      if (!tn) { skippedNoTextNode++; continue; }
       const key = makeKey(it.text, it.lang);
       // 缓存命中 → 直接渲染(不占网络)
       const hit = cache.get(key);
       if (hit) {
         cached++;
         if (mode === 'replace') {
-          if (!it.block.classList.contains('ct-replaced')) setMainText(it.block, tn, hit);
+          if (!it.block.classList.contains('ct-replaced')) setMainTextBlock(it.block, hit);
         } else {
-          if (!it.block.classList.contains('ct-bilingual')) appendBilingual(it.block, tn, hit);
+          if (!it.block.classList.contains('ct-bilingual')) appendBilingualBlock(it.block, hit);
         }
         continue;
       }
       // 已处理过该 key:跳过(避免重复请求/重复注入)
       if (mode === 'replace' && it.block.classList.contains('ct-replaced')) continue;
       if (mode === 'bilingual' && it.block.classList.contains('ct-bilingual')) continue;
-      todo.push({ key, text: it.text, srcLang: it.lang, block: it.block, tn });
+      todo.push({ key, text: it.text, srcLang: it.lang, block: it.block });
     }
-    return { blocks, todo, skippedNoTextNode, cached };
+    return { blocks, todo, skippedNoTextNode: 0, cached };
   }
 
   // 共享的分批流式翻译执行器
@@ -880,7 +979,7 @@
 
     const r = await streamTranslate(todo, (t, result) => {
       if (result && result.ok && result.text) {
-        appendBilingual(t.block, t.tn, result.text);
+        appendBilingualBlock(t.block, result.text);
       }
       // 失败:不写,保留原文(避免覆盖);只让 popup 看到 fail 计数
     });
@@ -934,11 +1033,9 @@
 
     const r = await streamTranslate(todo, (t, result) => {
       if (result && result.ok && result.text) {
-        setMainText(t.block, t.tn, result.text);
-      } else {
-        // 失败:还原占位期间设的 ct-replaced(如果之前 setMainText 没调用,不需要操作)
-        // 这里没提前设占位,直接不动
+        setMainTextBlock(t.block, result.text);
       }
+      // 失败:保留原文不动
     });
 
     if (r.lastResp) {

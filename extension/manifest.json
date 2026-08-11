@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Custom Hover Translate",
-  "version": "0.1.0",
-  "description": "悬停段落自动追加中文译文。后端走自部署 OpenAI 兼容服务(bailian/doubao/openrouter/deepseek/qwen-mt/ollama 等),支持多 provider 热切 + fallback 链。",
+  "name": "Prisir 翻译",
+  "version": "0.2.0",
+  "description": "翻译此页:免注册、开箱即用的整页翻译。默认内置免 Key 引擎,也可自定义任意 OpenAI 兼容端点(密钥仅存本机)。",
   "minimum_chrome_version": "116",
   "action": {
     "default_popup": "src/popup.html",
@@ -12,7 +12,7 @@
       "48": "icons/48.png",
       "128": "icons/128.png"
     },
-    "default_title": "Custom Hover Translate"
+    "default_title": "翻译此页"
   },
   "icons": {
     "16": "icons/16.png",
@@ -39,8 +39,13 @@
   },
   "permissions": ["storage", "activeTab", "scripting", "webNavigation", "contextMenus"],
   "host_permissions": [
+    "https://translate.googleapis.com/*",
     "http://127.0.0.1:12308/*",
     "http://localhost:12308/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"

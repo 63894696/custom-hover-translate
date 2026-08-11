@@ -269,3 +269,131 @@ footer {
   font-size: 10px;
   color: #6b7280;
 }
+
+/* ============ 三档简 UI 新增(2026-08-11 重构) ============ */
+/* 目标语言行 */
+.lang-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.lang-row label {
+  font-size: 12px;
+  color: #555;
+  white-space: nowrap;
+}
+.lang-row select { flex: 1; }
+
+/* 状态灯:警告色(需配置) */
+.led.warn { background: #e6a23c; box-shadow: 0 0 6px rgba(230,162,60,0.5); }
+
+/* 状态区可操作按钮 */
+#status-action { margin-top: 4px; }
+.action-btn {
+  padding: 4px 12px;
+  background: #4a8eff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.action-btn:hover { background: #3a7eef; }
+
+/* 高级设置折叠 */
+details.advanced {
+  background: #fff;
+  border: 1px solid #e2e6ee;
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+details.advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  color: #444;
+  outline: none;
+}
+.adv-group {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #eee;
+}
+.adv-label {
+  display: block;
+  font-weight: 600;
+  font-size: 12px;
+  color: #444;
+  margin-bottom: 6px;
+}
+.radio {
+  display: block;
+  font-weight: 400;
+  font-size: 12px;
+  color: #333;
+  margin: 4px 0;
+  cursor: pointer;
+}
+.radio input { margin-right: 6px; }
+.adv-group input[type=text],
+.adv-group input[type=password] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+/* 模型名行:输入框 + 拉取列表按钮 */
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.model-row input[type=text] {
+  flex: 1;
+  margin-bottom: 0;
+}
+.model-row .link-btn {
+  flex: none;
+  float: none;
+  white-space: nowrap;
+  border: 1px solid #4a8eff;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+.model-row .link-btn:hover { background: #f0f6ff; text-decoration: none; }
+.model-row .link-btn:disabled { color: #aaa; border-color: #aaa; cursor: not-allowed; }
+.adv-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.adv-actions .primary {
+  background: #4a8eff;
+  color: #fff;
+  border: none;
+}
+.adv-actions .primary:hover { background: #3a7eef; }
+.hint { font-size: 11px; color: #888; margin: 4px 0; line-height: 1.4; }
+.hint a { color: #4a8eff; text-decoration: none; }
+.hint a:hover { text-decoration: underline; }
+
+/* footer 链接按钮 */
+.link-btn {
+  background: none;
+  border: none;
+  color: #4a8eff;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+  float: right;
+}
+.link-btn:hover { text-decoration: underline; background: none; }

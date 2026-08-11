@@ -25,6 +25,8 @@ label {
   font-weight: 600;
 }
 label.check { font-weight: 500; }
+label.radio { font-weight: 500; display: block; margin: 6px 0; cursor: pointer; }
+label.radio input[type=radio] { display: inline-block; width: auto; margin-right: 6px; vertical-align: middle; margin-top: 0; }
 label input, label select {
   display: block;
   width: 100%;
@@ -59,3 +61,23 @@ button {
 button:hover { background: #f0f6ff; }
 button.primary { background: #4a8eff; color: #fff; }
 #msg { margin-left: auto; }
+
+/* 模型名行:输入框 + 拉取列表按钮 */
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.model-row input[type=text] {
+  flex: 1;
+  margin-top: 0;
+}
+.model-row .mini {
+  flex: none;
+  width: auto;
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.model-row .mini:disabled { color: #aaa; border-color: #aaa; cursor: not-allowed; }

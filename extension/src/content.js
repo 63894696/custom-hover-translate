@@ -339,6 +339,59 @@
         if (n.querySelector && n.querySelector('faceplate-screen-reader-content, .sr-only, [class*="screen-reader"], [class*="visually-hidden"]')) return false;
         if (/absolute/.test(cls) && /inset-0/.test(cls)) return false;
       } catch {}
+      // 【#23 hover-tooltip 容器不整选】bookshelf 类页面:书/影/游戏封面 + "hover 才浮现"
+      //   的介绍气泡(如 .tooltip-text,position:absolute + opacity:0/visibility:hidden)。
+      //   这种容器(如 .tooltip-container)的全部文本几乎都在那个隐藏气泡里(封面是 <img>
+      //   无文本节点)。若整体选它,replace 会把气泡里的介绍文本顶到容器顶部【常驻显示】,
+      //   挤崩书架网格;且气泡原文被 TreeWalker 清空 → hover 时显示空白。
+      //   正确做法:容器不整选;让隐藏气泡【自己独立成块、就地 replace】(它的 absolute+
+      //   隐藏定位不动,hover 时显示中文,机制不破)。
+      //   判据(全部命中才排除):①非 LEAF 段落容器;②含 absolute+不可见(opacity0/visHidden)
+      //   且自身文本≥12 的后代;③去掉这些隐藏后代后,容器剩余前景文本<12(说明文本全在气泡里)。
+      //   沉浸式翻译同样漏翻这些气泡(它也做可见性过滤)——我们靠"气泡就地翻"反而翻到它翻不到的。
+      //   性能(reviewer minor#A):先用【不计算样式】的可疑 class 选择器做硬短路——普通页面
+      //   绝大多数容器无 tooltip/popover 类后代,一次便宜 querySelector 即跳过整段判据,
+      //   不跑后面的 getComputedStyle/TreeWalker。只有真疑似 tooltip 容器才进入样式细查。
+      //   误伤闸门(reviewer minor#B):判据③要求"剩余前景<12",正常含可见正文(≥12)的容器
+      //   不会被误排除;<12 的短前景文本即使容器被排除也不漏翻(本就过不了 effMinChars=12)。
+      try {
+        if (!LEAF_TAGS.has(n.tagName) && n.querySelector) {
+          // 硬短路:无可疑 tooltip 类后代 → 直接跳过(普通容器零额外开销)
+          const pool = n.querySelectorAll('.tooltip-text, [class*=tooltip], [class*=popover], [class*=hover-tip], [class*=hovertip], [data-tooltip], [role=tooltip]');
+          if (pool.length) {
+            let hiddenTextCarrier = null;
+            let checked = 0;
+            for (const el of pool) {
+              if (checked++ > 12) break;
+              const cs = getComputedStyle(el);
+              if (cs.position !== 'absolute' && cs.position !== 'fixed') continue;
+              if (!(cs.opacity === '0' || cs.visibility === 'hidden')) continue;
+              const et = normalizeText(collectVisibleText(el));
+              if (et.length >= 12) { hiddenTextCarrier = et; break; }
+            }
+            if (hiddenTextCarrier) {
+              // 容器去掉所有 absolute+不可见后代后的剩余前景文本
+              let foreground = 0;
+              const tw = document.createTreeWalker(n, NodeFilter.SHOW_TEXT, {
+                acceptNode(tn) {
+                  const p = tn.parentElement;
+                  if (!p) return NodeFilter.FILTER_REJECT;
+                  // 该文本节点是否藏在 absolute+不可见后代里
+                  let a = p, hidden = false, depth = 0;
+                  while (a && a !== n && depth < 8) {
+                    const cs = getComputedStyle(a);
+                    if ((cs.position === 'absolute' || cs.position === 'fixed') && (cs.opacity === '0' || cs.visibility === 'hidden')) { hidden = true; break; }
+                    a = a.parentElement; depth++;
+                  }
+                  return hidden ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+                }
+              });
+              let tn; while ((tn = tw.nextNode())) foreground += (tn.nodeValue || '').trim().length;
+              if (foreground < 12) return false; // 文本全在气泡里 → 容器不整选,气泡自己翻
+            }
+          }
+        }
+      } catch {}
       return true;
     }
     for (const n of nodes) {

@@ -51,6 +51,34 @@
     </label>
   </fieldset>
 
+  <fieldset id="subtitle-fieldset">
+    <legend>视频字幕</legend>
+    <label class="check">
+      <input type="checkbox" id="subtitlesEnabled" checked />
+      开启视频双语字幕(YouTube 及支持 HTML5 字幕的网站)
+    </label>
+    <label>字幕模式
+      <select id="subtitleMode">
+        <option value="bilingual">双语对照(原文上 / 译文下)</option>
+        <option value="replace">仅译文</option>
+      </select>
+    </label>
+    <label class="check">
+      <input type="checkbox" id="subtitlePreferManual" checked />
+      优先使用人工字幕(无人工字幕时回落机翻)
+    </label>
+    <p class="hint">字幕文本经你配置的翻译引擎翻译,不收集、不上传。</p>
+  </fieldset>
+
+  <fieldset id="image-fieldset">
+    <legend>图片翻译</legend>
+    <label class="check">
+      <input type="checkbox" id="imageTranslateEnabled" checked />
+      右键菜单显示「翻译图片文字信息」(alt / 标题 / 图注)
+    </label>
+    <p class="hint">翻译图片附带的文字信息(alt 文本、标题、图注等),经你的引擎翻译。<strong>不含像素级 OCR</strong>(图中文字识别需视觉模型,暂不支持)。</p>
+  </fieldset>
+
   <fieldset id="backend-fieldset">
     <legend>本地后端(选「本地后端」时填)</legend>
     <label>后端地址

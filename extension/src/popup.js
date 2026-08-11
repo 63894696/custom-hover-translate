@@ -192,6 +192,9 @@ $('save-adv').addEventListener('click', async () => {
   payload.promptRole = $('promptRole').value || 'general';
   const t = parseFloat($('temperature').value);
   payload.temperature = isNaN(t) ? 0.2 : Math.max(0, Math.min(2, t));
+  // 字幕:开关 + 双语/仅译文
+  payload.subtitlesEnabled = $('subtitlesEnabled').checked;
+  payload.subtitleMode = (document.querySelector('input[name="subtitleMode"]:checked')?.value === 'replace') ? 'replace' : 'bilingual';
   await chrome.storage.local.set(payload);
   $('adv-msg').textContent = '已保存';
   setTimeout(() => { $('adv-msg').textContent = ''; }, 3000);
@@ -259,7 +262,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 // ---------- 初始化 ----------
 document.addEventListener('DOMContentLoaded', async () => {
   CT_LANGS.fillLangSelect($('dstLang'));
-  const s = await chrome.storage.local.get(['dstLang', 'engine', 'activeMode', 'baseURL', 'model', 'apiKey', 'endpoint', 'promptRole', 'temperature']);
+  const s = await chrome.storage.local.get(['dstLang', 'engine', 'activeMode', 'baseURL', 'model', 'apiKey', 'endpoint', 'promptRole', 'temperature', 'subtitlesEnabled', 'subtitleMode']);
   // 未设过目标语言 → 按系统语言推断(仅写 UI,不落盘;落盘由 onInstalled 或用户选择触发)
   $('dstLang').value = s.dstLang || CT_LANGS.guessTargetLang();
   const eng = s.engine || 'auto';
@@ -277,6 +280,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('promptRole').value = s.promptRole || 'general';
   updateRoleDesc();
   $('temperature').value = (s.temperature != null) ? s.temperature : 0.2;
+  // 字幕
+  $('subtitlesEnabled').checked = s.subtitlesEnabled !== false;
+  const sm = document.querySelector(`input[name="subtitleMode"][value="${s.subtitleMode === 'replace' ? 'replace' : 'bilingual'}"]`);
+  if (sm) sm.checked = true;
   toggleAdvGroups();
   await checkStatus();
 });

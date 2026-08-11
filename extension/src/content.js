@@ -124,11 +124,34 @@
     if (!s) return '';
     return s.replace(/\s+/g, ' ').trim();
   }
+  // 扫描/选块时统计块文本,统一跳过这些"非正文"子标签(script/style/noscript/svg/code 等)。
+  // 与 setMainTextBlock 写入端的 SKIP 同一套,根治"把 <script> 数据岛当正文翻译显示"的误伤。
+  const SCAN_SKIP_TAGS = new Set(['SCRIPT','STYLE','NOSCRIPT','SVG','CODE','PRE','TEXTAREA','INPUT','SELECT','KBD','SAMP','VAR','TITLE','IFRAME','CANVAS','TEMPLATE']);
+  // 只收集 el 内"非 SKIP 子树"的可见文本节点内容,拼接返回(对齐沉浸式翻译的 TEXT_NODE 收集思路)。
+  // 用 TreeWalker 而非 innerText/textContent:后者会把可见 <script> 的代码一并算入(误伤根因)。
+  function collectVisibleText(el) {
+    if (!el) return '';
+    const parts = [];
+    try {
+      const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+        acceptNode(n) {
+          const p = n.parentElement;
+          if (!p || SCAN_SKIP_TAGS.has(p.tagName)) return NodeFilter.FILTER_REJECT;
+          return ((n.nodeValue || '').trim().length > 0) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        },
+      });
+      let node;
+      while ((node = tw.nextNode())) parts.push(node.nodeValue);
+    } catch (e) {
+      return (el.textContent || '').toString();
+    }
+    return parts.join(' ');
+  }
   function extractText(el, { minChars = 4, maxChars = 1500 } = {}) {
     if (!el) return '';
     let raw = '';
     try {
-      raw = (el.innerText || el.textContent || '').toString();
+      raw = collectVisibleText(el);
     } catch (e) {
       return '';
     }

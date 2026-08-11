@@ -11,6 +11,8 @@ class H(http.server.SimpleHTTPRequestHandler):
             return self._serve(os.path.join(ROOT, "replace-p0-page.html"), "text/html")
         if self.path == "/attr-p1a-page.html":
             return self._serve(os.path.join(ROOT, "attr-p1a-page.html"), "text/html")
+        if self.path == "/script-misattack-page.html":
+            return self._serve(os.path.join(ROOT, "script-misattack-page.html"), "text/html")
         if self.path == "/content.js":
             return self._serve(CONTENT_JS, "application/javascript")
         self.send_error(404, "not found")

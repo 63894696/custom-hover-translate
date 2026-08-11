@@ -848,6 +848,14 @@
     }
     delete block.dataset.ctOrig;
     block.classList.remove('ct-replaced', 'ct-bilingual');
+    // 方向2(#22):标记"此块被用户还原过"。observer 自动跟进时跳过带此标记的块
+    //   (不重译刚还原的旧内容,守 #13);但【全新出现的 DOM 块】无此标记,仍会被自动
+    //   跟进翻译(嵌入面板等动态内容不漏)。标记只在 removeAll/手动还原时打,刷新页面自清。
+    // 注(reviewer minor#1):本函数【故意不进 selfInjecting】——上面 classList.remove
+    //   产生的 class mutation 会被 observer 看到(attributeFilter 含 'class';dataset.ctRestored
+    //   不在 filter,不会单独触发),随后 scanAndAutoTranslate 的逐块 ct-restored 跳过保证幂等,
+    //   不会把刚还原的块重译回去。这是"设计保证"而非巧合,勿给本函数套 selfInjecting。
+    try { block.dataset.ctRestored = '1'; } catch {}
   }
 
   function replaceNode(oldEl, newEl) {
@@ -900,8 +908,13 @@
     autoTranslate = !!s.activeMode;
   }
 
-  let autoTranslate = false; // 全局自动翻译开关(用户持久化)
+  let autoTranslate = false; // 全局自动翻译开关(用户持久化,activeMode 驱动)
   let autoMode = 'replace'; // 'bilingual' | 'replace'(默认仅译文)
+  // 方向2(#22):本会话是否跑过整页翻译。observer 动态跟进的真正门控用它,而非 autoTranslate。
+  //   autoTranslate 在 popup 还原(activeMode=null)时变 false,会连带把"全新出现的 DOM 块"
+  //   也挡掉(嵌入面板漏翻 #21)。sessionTranslated 只在真正跑过整页后立起,且 removeAll/还原
+  //   不清它——旧块靠 ct-restored 标记单独跳过,新块(无标记)照常跟进。
+  let sessionTranslated = false;
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
@@ -991,10 +1004,13 @@
   // 展开后才该翻;整页翻译走 collectBlocks 不需要这道。
   function scanAndAutoTranslate() {
     if (!enabled) return;
-    // 还原/关闭自动跟踪后(activeMode=null → autoTranslate=false),observer 不得再重扫。
-    // 否则用户点「还原」清掉译文 → 块上的 ctOrig/ct-replaced 标记被清 → observer 一触发
-    // 又把刚还原的块重译回去(#13 根因:还原被自动检测覆盖)。
-    if (!autoTranslate) return;
+    // 方向2(#22):observer 动态跟进的门控 = "本会话跑过整页翻译"(sessionTranslated),
+    //   而非 autoTranslate。原因:autoTranslate 在 popup 还原(activeMode=null)时变 false,
+    //   会把"还原后全新出现的 DOM 块"(嵌入面板等)也挡掉 → 漏翻(#21)。改用 sessionTranslated
+    //   后:跑过整页的页面,observer 跟进新 DOM;从未激活的页面(用户没点过主按钮)不打扰。
+    //   防"还原的旧块被重译"(#13)不靠这道总开关,而靠下面逐块的 ct-restored 标记跳过——
+    //   旧块被 removeAll 打了 ct-restored,新块没有 → 各自得到正确待遇。
+    if (!sessionTranslated) return;
     try {
       const blocks = scanAllBlocks({ minChars: 4, maxChars: 1500, mode: autoMode === 'replace' ? 'replace' : 'bilingual' });
       let n = 0;
@@ -1003,6 +1019,9 @@
         // 跳过已翻译/已替换(自身 + 祖先链任一已译都算,防译文被当新块重译)
         if (el.dataset && (el.dataset.ctOrig != null || el.classList.contains('ct-bilingual'))) continue;
         if (el.classList && el.classList.contains('ct-replaced')) continue;
+        // 方向2(#22):跳过"被用户还原过"的块(自身或祖先带 ct-restored)→ 不重译刚还原的
+        //   旧内容,守 #13。全新出现的块无此标记 → 正常跟进翻译。
+        if (el.closest && el.closest('[data-ct-restored]')) continue;
         // 在我们的译文节点内部,或祖先已是双语/替换块 → 跳过(保守跟进核心)
         if (el.closest && el.closest('.ct-bi, .ct-target, .ct-bilingual, .ct-replaced')) continue;
         // 可见性:不是 hidden/aria-hidden,不是 display:none(FAQ 未展开时跳过)
@@ -1247,6 +1266,7 @@
 
   // =============== 双语对照入口 ===============
   async function translateAll() {
+    sessionTranslated = true; // #22:标记本会话已跑过整页,observer 此后跟进新出现的 DOM
     const { blocks, todo, skippedNoTextNode, cached } = collectBlocks('bilingual');
     const attrs = collectAttrs('bilingual');
     const allTodo = todo.concat(attrs.todo);
@@ -1305,6 +1325,7 @@
 
   // =============== 仅译文入口(用主文本节点直接改 nodeValue) ===============
   async function translateAllReplace() {
+    sessionTranslated = true; // #22:标记本会话已跑过整页,observer 此后跟进新出现的 DOM
     const { blocks, todo, skippedNoTextNode, cached } = collectBlocks('replace');
     const attrs = collectAttrs('replace');
     const allTodo = todo.concat(attrs.todo);

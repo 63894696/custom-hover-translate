@@ -107,15 +107,27 @@ async function callGoogleGtx({ text, srcLang, dstLang }) {
 }
 
 // ---------- 通用 OpenAI 兼容端点(用户自填) ----------
-function buildTranslatePrompt({ text, srcLang, dstLang }) {
+// C 步(2026-08-12):提示词改为「角色预设」(prompts.js)。按 storage.promptRole 选角色,
+// 支持 {{to}}/{{text}} 占位与 %% 多段批量;google_gtx 不走这里。
+async function readPromptCfg() {
+  const s = await chrome.storage.local.get(['promptRole', 'termsText']);
+  return { promptRole: s.promptRole || 'general', terms: s.termsText || '' };
+}
+
+function buildTranslatePrompt({ text, srcLang, dstLang, promptRole, terms }) {
+  // 有 prompts.js 就用角色体系;没有(异常兜底)退回原通用 prompt。
+  if (self.CT_PROMPTS && self.CT_PROMPTS.buildPrompt) {
+    const p = self.CT_PROMPTS.buildPrompt({ roleId: promptRole || 'general', dstLang, singleText: text, terms });
+    return { system: p.system, user: p.user };
+  }
   const system = 'You are a professional translation engine. Translate the user text to the target language. Output ONLY the translated text, no explanation, no quotes, no extra whitespace.';
   const user = `Source language: ${srcLang || 'auto-detect'}. Target language: ${dstLang || 'Chinese'}.\n\n${text}`;
   return { system, user };
 }
 
-async function callOpenAICompat({ baseURL, apiKey, model, text, srcLang, dstLang }) {
+async function callOpenAICompat({ baseURL, apiKey, model, text, srcLang, dstLang, promptRole, terms, temperature, maxTokens }) {
   const url = `${(baseURL || '').replace(/\/+$/, '')}/chat/completions`;
-  const { system, user } = buildTranslatePrompt({ text, srcLang, dstLang });
+  const { system, user } = buildTranslatePrompt({ text, srcLang, dstLang, promptRole, terms });
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
   const body = {
@@ -124,8 +136,8 @@ async function callOpenAICompat({ baseURL, apiKey, model, text, srcLang, dstLang
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    max_tokens: 800,
-    temperature: 0.2,
+    max_tokens: Number(maxTokens) || 800,
+    temperature: (temperature != null && !isNaN(Number(temperature))) ? Number(temperature) : 0.2,
     stream: false,
   };
   const t0 = Date.now();
@@ -190,6 +202,10 @@ async function engineTranslate({ text, srcLang, dstLang }) {
     return { ok: false, error: eng.error, needConfig: true };
   }
   const args = { text, srcLang, dstLang };
+  // C 步:角色提示词 + 温度/最大 token 配置(仅 openai_compat 用)。
+  const pc = await readPromptCfg();
+  const adv = await chrome.storage.local.get(['temperature', 'maxTokens']);
+  const llmOpts = { promptRole: pc.promptRole, terms: pc.terms, temperature: adv.temperature, maxTokens: adv.maxTokens };
   let r;
   if (eng.kind === 'google_gtx') {
     r = await callGoogleGtx(args);
@@ -197,14 +213,14 @@ async function engineTranslate({ text, srcLang, dstLang }) {
     if (!r.ok && r.retryable) {
       const cfg = await readCfg();
       if ((cfg.engine || 'auto') === 'auto' && cfg.baseURL && cfg.model) {
-        const r2 = await callOpenAICompat({ baseURL: cfg.baseURL, apiKey: cfg.apiKey || '', model: cfg.model, ...args });
+        const r2 = await callOpenAICompat({ baseURL: cfg.baseURL, apiKey: cfg.apiKey || '', model: cfg.model, ...args, ...llmOpts });
         if (r2.ok) return { ...r2, fallbackUsed: true };
       }
     }
     return r;
   }
   if (eng.kind === 'openai_compat') {
-    return await callOpenAICompat({ ...eng, ...args });
+    return await callOpenAICompat({ ...eng, ...args, ...llmOpts });
   }
   if (eng.kind === 'local_backend') {
     return await callLocalBackend({ ...eng, ...args });
@@ -257,10 +273,65 @@ async function engineStatus() {
 }
 
 // 暴露给 background.js(MV3 service worker 用 importScripts 或同文件;这里挂到 self)
+// ---------- %% 多段批量(C 步) ----------
+// 把多条文本用 \n%%\n 拼进一次 LLM 请求,模型按同分隔符回译,再切回各条。
+// 省 token、降延迟(一次请求代替 N 次)。仅 openai_compat 且角色 batchOK 时用;
+// 切回条数不符 / 出错 → 返回 ok:false,由调用方回退逐条翻译,绝不丢数据。
+async function engineTranslateBatch({ texts, srcLang, dstLang }) {
+  if (!Array.isArray(texts) || texts.length < 2) return { ok: false, error: 'too_few' };
+  const eng = await resolveEngine();
+  if (eng.kind !== 'openai_compat') return { ok: false, error: 'not_openai_compat' };
+  const pc = await readPromptCfg();
+  const role = self.CT_PROMPTS && self.CT_PROMPTS.getRole ? self.CT_PROMPTS.getRole(pc.promptRole) : null;
+  if (!role || !role.batchOK) return { ok: false, error: 'role_no_batch' };
+  if (!self.CT_PROMPTS || !self.CT_PROMPTS.buildPrompt) return { ok: false, error: 'no_prompts' };
+
+  const to = self.CT_PROMPTS.toName(dstLang);
+  const adv = await chrome.storage.local.get(['temperature', 'maxTokens']);
+  const p = self.CT_PROMPTS.buildPrompt({ roleId: pc.promptRole, dstLang, batchTexts: texts, terms: pc.terms });
+  const url = `${(eng.baseURL || '').replace(/\/+$/, '')}/chat/completions`;
+  const headers = { 'Content-Type': 'application/json' };
+  if (eng.apiKey) headers['Authorization'] = `Bearer ${eng.apiKey}`;
+  // 批量时 max_tokens 要随条数放大,避免长批被截断。
+  const estTokens = Math.min(4000, Math.max(800, Math.ceil(texts.join('').length * 1.2)));
+  const body = {
+    model: eng.model,
+    messages: [ { role: 'system', content: p.system }, { role: 'user', content: p.user } ],
+    max_tokens: Number(adv.maxTokens) || estTokens,
+    temperature: (adv.temperature != null && !isNaN(Number(adv.temperature))) ? Number(adv.temperature) : 0.2,
+    stream: false,
+  };
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TRANSLATE_TIMEOUT_MS + texts.length * 2000);
+  try {
+    const resp = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+    clearTimeout(timer);
+    const durationMs = Date.now() - t0;
+    if (!resp.ok) {
+      return { ok: false, error: `HTTP ${resp.status}`, provider: 'openai_compat', model: eng.model, durationMs, retryable: true, httpStatus: resp.status };
+    }
+    const data = await resp.json();
+    const choice = data && data.choices && data.choices[0];
+    const out = (choice && choice.message && (choice.message.content || '')) || '';
+    const parts = self.CT_PROMPTS.splitBatch(out, texts.length);
+    if (!parts) {
+      // 切回条数不符 → 让调用方回退逐条,不丢数据
+      return { ok: false, error: 'batch_split_mismatch', provider: 'openai_compat', model: eng.model, durationMs, retryable: false };
+    }
+    return { ok: true, parts, provider: 'openai_compat', model: eng.model, durationMs, batched: true, count: texts.length };
+  } catch (e) {
+    clearTimeout(timer);
+    const isTimeout = e && e.name === 'AbortError';
+    return { ok: false, error: isTimeout ? 'timeout' : 'network', provider: 'openai_compat', model: eng.model, durationMs: Date.now() - t0, retryable: true };
+  }
+}
+
 self.CT_ENGINES = {
   detectEngine,
   resolveEngine,
   engineTranslate,
+  engineTranslateBatch,
   engineStatus,
   callGoogleGtx,
   callOpenAICompat,

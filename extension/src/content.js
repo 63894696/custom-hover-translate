@@ -314,6 +314,12 @@
         try { if (n.closest(STAY_ORIGINAL_SELECTORS.join(','))) return false; } catch {}
         // 祖先是我们注入的译文/容器 → 跳过(防译文区域被当候选)
         try { if (n.closest('.ct-bi, .ct-target, .ct-bilingual, .ct-replaced')) return false; } catch {}
+        // I4 防护(#20 reviewer):含【已注入译文的后代】的块永不整体选。
+        //   否则 replace 的 setMainTextBlock 整块 TreeWalker 会与已注入子块的 ctRepl/ct-bi
+        //   互相踩踏(还原错位),bilingual 会父子双重翻译。跨 pass 场景唯一安全出口。
+        //   (注意:这条会让"块内部分文本已翻、剩余裸文本未翻"的块整体落选——
+        //    其剩余的达标裸文本节点由 scanAllBlocks 末尾的孤儿文本收集补翻,见下。)
+        try { if (n.querySelector && n.querySelector('.ct-bi, .ct-target, [data-ct-orig], [data-ct-repl]')) return false; } catch {}
         // 【全页翻译】header 不再特殊跳过:导航按钮/菜单(PRODUCTS/SOLUTIONS 等)也要翻。
         //   此前"header 里只放行 H1-H6、跳过其余"会漏掉导航按钮,与全页翻译目标冲突,已移除。
         //   站点 logo/极短图标等由 minChars/looksLikeMetadata 常规规则过滤。
@@ -407,6 +413,58 @@
       while (anc) { blocked.add(anc); anc = anc.parentElement; }
       out.push({ block: c.n, text: c.text, lang: c.lang });
     }
+
+    // ============ 孤儿裸文本节点补收(#20,2026-08-11) ============
+    // 场景:某元素(如 <A>)含【元素子(已被单独翻,如 <span class=title>标签)】+
+    // 【达标的直接裸文本节点(如文章英文标题)】。元素子先被选/I4 拦截 → 该元素整体落选,
+    // 其未被任何译文覆盖的直接裸文本节点成了漏网之鱼(裸文本节点无包裹元素,选择器选不到)。
+    // 补收:对未整体入选的候选祖先,找其"未被已选/已注入覆盖的达标直接文本节点",
+    // 用轻量 <span class=ct-orphan> 包起来当独立块补翻。span 是真元素,注入/还原全复用现有链;
+    // 包裹属 selfInjecting,observer 忽略。replace 的 setMainTextBlock 只清空该 span 内文本,
+    // 不碰兄弟已译元素 → 无 restore 踩踏。
+    const SKIP_WRAP = new Set(['SCRIPT','STYLE','NOSCRIPT','CODE','PRE','TEXTAREA','INPUT','SELECT','KBD','SAMP','VAR','SVG','TITLE','IFRAME']);
+    function hasOrphanText(el) {
+      // el 的直接子文本节点里,有达标(≥4 可见字符)且未被译文覆盖的
+      for (const ch of el.childNodes) {
+        if (ch.nodeType !== 3) continue;
+        const t = (ch.nodeValue || '').replace(/\s+/g, ' ').trim();
+        if (t.length >= 4 && /[a-zA-Z]{4,}/.test(t) && !/[一-鿿]/.test(t)) return ch;
+      }
+      return null;
+    }
+    function isCoveredByChosen(textNode) {
+      // 该文本节点的父元素是否已被整体选(在 out 里)→ 已被覆盖,不算孤儿
+      const p = textNode.parentElement;
+      if (!p) return false;
+      for (const it of out) { if (it.block === p || it.block.contains(p)) return true; }
+      return false;
+    }
+    // 候选源:所有含裸文本节点的元素(含被拦的容器/链接),不限于 sel
+    const orphanSeen = new Set();
+    document.querySelectorAll('a, p, li, div, span, h1, h2, h3, h4, h5, h6, button, label, dd, dt, figcaption, summary, em, strong, td, th').forEach((el) => {
+      if (orphanSeen.has(el)) return;
+      // 已整体入选 / 是译文 / 在跳过子树 → 不需要补
+      if (chosen.has(el)) return;
+      if (el.classList && (el.classList.contains('ct-target') || el.classList.contains('ct-bi') || el.classList.contains('ct-orphan'))) return;
+      if (el.closest && el.closest('.ct-bi, .ct-target, .ct-orphan')) return;
+      let skip = false;
+      for (let cur = el; cur && cur.nodeType === 1; cur = cur.parentElement) { if (cur.tagName && SKIP_WRAP.has(cur.tagName.toUpperCase())) { skip = true; break; } }
+      if (skip) return;
+      const tn = hasOrphanText(el);
+      if (!tn) return;
+      if (isCoveredByChosen(tn)) return;  // 父已被整体翻,这段裸文本已在其中
+      const text = (tn.nodeValue || '').replace(/\s+/g, ' ').trim();
+      if (looksLikeMetadata(text)) return;
+      // 包一层 span,当独立块补翻
+      try {
+        const wrap = document.createElement('span');
+        wrap.className = 'ct-orphan';
+        tn.parentNode.insertBefore(wrap, tn);
+        wrap.appendChild(tn);
+        orphanSeen.add(el);
+        out.push({ block: wrap, text, lang: detectLang(text).tag });
+      } catch (e) {}
+    });
 
     // 按文档序输出,保证译文注入顺序自然
     out.sort((a, b) => {

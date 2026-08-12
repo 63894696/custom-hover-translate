@@ -52,6 +52,7 @@ cuechange → 双语 overlay   → dataURL(jpeg)
 - **抽帧**:`captureFrame` 用离屏 canvas `drawImage(video)` → `toDataURL('image/jpeg', .72)`,最长边压到 `maxW`(默认 512)省 token。**跨域污染媒体(无 CORS 头)会抛 SecurityError → 返回 null 跳过**,字幕轨不受影响。
 - **笔记提示词(结构化)**:`buildNotePrompt` 与纯翻译**分离**,对齐 HoverNotes 基线——系统提示要求「看懂画面+结合前面已记上下文,提炼要点」「新主题给 `### 标题`,延续主题不给」「外语术语中英对照」「bullet 要点+加粗关键词」。`_recent`(最近 4 条)作为上下文喂入,供 LLM 判断主题是否延续。这正是 HoverNotes 缺的另一半。
 - **状态机(交通灯)**:`idle(灰) → starting(黄,接指令/请求在飞,脉动) → working(绿,成功出笔记) → error(红)`。`setStatusState` 驱动;`onStatus(fn)` 订阅让 video-study 悬浮按钮灯与面板头灯**双灯同步**。`statusFromResponse` 由 vision-note 返回推断(needConfig/error/empty→红,ok→绿),网络延迟期间停在黄灯,让用户一眼看懂卡在准备还是已在工作。
+- **内容感知去重(省 token)**:真实视频大量时间画面静止。`frameSample` 把帧缩到 32×32,`meanAbsDiffRGB` 对 RGB 三通道与上一帧求均差,`contentChanged` 仅在均差 ≥ 8(实测:同帧微噪 0.1 / 换背景色 17.3 / 加内容 9.9)才发请求;静止帧跳过并 `_skipCount` 计数,状态栏显「画面未变,跳过(已省 N 次)」。比 dHash(对低纹理钝)、亮度直方图(对色相盲)更适配幻灯片/板书场景。模型被告知「只在画面实质变化时才给帧」,无新信息可回「跳过」不记入。
 - **节奏**:`intervalMs`(默认 8s)定时 `tick`,播放中才抽,`busy` 单帧在飞防并发。
 - **侧栏**:右上 `.ct-vnotes-panel`,头部含状态灯 + 已记条数;`addNote` 解析 LLM 输出的 `### 标题` → 渲染分段标题(`ct-vnotes-heading`),正文 bullet 渲染加粗;每条 `[时间戳] 笔记正文`,时间戳可点击 `video.currentTime = t` 跳回。
 
@@ -185,3 +186,11 @@ tags:
 | Markdown 导出(YAML+###) | ✅ | frontmatter `tags: hover-notes` + `### 分段` |
 
 截图:`tests/_vstudy_dual.jpg`、`tests/_notes_panel.jpg`、`tests/_vlight_notes.jpg`(绿灯+分段标题+bullet 加粗)。
+
+### 8.3 内容感知去重(`tests/_vdedup_e2e.py` / `_vdedup_e2e2.py`)
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 静止帧跳过(省 token) | ✅ | `skipped: 3+`,状态栏「画面未变,跳过(已省 N 次)」 |
+| 主题切换仍出新笔记 | ✅ | 切主题B 出「第二章:矩阵(Matrices)」 |
+| 笔记数远少于 tick 数 | ✅ | `notes=2` vs tick≈11,无每帧重复 |
+| 逐帧均差分布 | ✅ | 静态期全 0,切换尖峰 16.08(阈值 8) |

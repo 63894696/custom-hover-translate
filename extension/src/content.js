@@ -1810,6 +1810,33 @@
     });
   }
 
+  // ================= babelspan 内容柜桥(页面 ↔ content script ↔ background) =================
+  // shelf.html 在 main world 用 window.postMessage 请求;这里(isolated world)有完整 chrome.runtime,
+  // 代为内部 sendMessage 到 background(复用用户已配模型 KEY,无需 externally_connectable / 扩展 ID)。
+  // 仅在 babelspan 域 / 本地调试页注入时启用;只认 __ctShelf 标记的消息,转发 shelf-ping / shelf-poster。
+  function initShelfBridge() {
+    const h = location.hostname;
+    const isShelfSite = /(^|\.)babelspan\.com$/.test(h) || h === '127.0.0.1' || h === 'localhost';
+    if (!isShelfSite) return;
+    window.addEventListener('message', (ev) => {
+      if (ev.source !== window) return;
+      const d = ev.data;
+      if (!d || d.__ctShelf !== 'req' || !d.kind) return;
+      const reply = (resp) => {
+        try { window.postMessage({ __ctShelf: 'res', id: d.id, resp }, '*'); } catch (e) {}
+      };
+      if (d.kind === 'shelf-ping') { reply({ ok: true }); return; }
+      if (d.kind === 'shelf-poster') {
+        chrome.runtime.sendMessage({
+          type: 'shelf-poster', title: d.title || '', author: d.author || '',
+          ctype: d.ctype || '', skip: d.skip || 0,
+        }).then(reply).catch((e) => reply({ ok: false, error: String(e && e.message || e) }));
+        return;
+      }
+    });
+  }
+  initShelfBridge();
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });
   } else {

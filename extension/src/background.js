@@ -81,8 +81,63 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  // 视频笔记:多模态帧理解(视频笔记原型)。帧图(base64 dataURL)+ 笔记提示词,
+  // 走用户已配置的 OpenAI 兼容多模态端点(Agnes / Kimi / MiniMax 等)。仅识别当前帧,不收集。
+  if (msg.type === 'vision-note') {
+    handleVisionNote(msg)
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
+    return true;
+  }
+
   return false;
 });
+
+// 多模态帧理解:把 {base64, system, user, maxTokens} 转 {baseURL}/chat/completions 的 image_url 消息。
+async function handleVisionNote(msg) {
+  const s = await chrome.storage.local.get(['baseURL', 'apiKey', 'model', 'visionModel']);
+  const baseURL = (s.baseURL || '').replace(/\/+$/, '');
+  const model = s.visionModel || s.model; // 允许单独配多模态模型,缺省复用主模型
+  if (!baseURL || !model) return { ok: false, needConfig: true, error: '请先在设置里配置端点与模型' };
+  const dataUrl = msg && msg.base64;
+  if (!dataUrl || typeof dataUrl !== 'string' || !/^data:image\//.test(dataUrl)) {
+    return { ok: false, error: 'no_image' };
+  }
+  const body = {
+    model,
+    messages: [
+      { role: 'system', content: msg.system || '你是视频笔记助手。' },
+      { role: 'user', content: [
+        { type: 'text', text: msg.user || '描述这一帧。' },
+        { type: 'image_url', image_url: { url: dataUrl } },
+      ] },
+    ],
+    max_tokens: Number(msg.maxTokens) || 700,
+    stream: false,
+  };
+  // 多模态推理模型(Agnes 2.5 / Kimi k3 等)可能强制 temperature 或需更大 max_tokens,
+  // 不设 temperature(用各家默认),避免 400。
+  const headers = { 'Content-Type': 'application/json' };
+  if (s.apiKey) headers['Authorization'] = `Bearer ${s.apiKey}`;
+  const t0 = Date.now();
+  try {
+    const r = await fetch(`${baseURL}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body) });
+    const durationMs = Date.now() - t0;
+    if (!r.ok) {
+      const txt = await r.text().catch(() => '');
+      return { ok: false, error: `HTTP ${r.status}`, httpStatus: r.status, detail: txt.slice(0, 200), durationMs };
+    }
+    const data = await r.json();
+    const ch = data && data.choices && data.choices[0];
+    let content = ch && ch.message && ch.message.content;
+    if (Array.isArray(content)) content = content.map((c) => (c && c.text) || '').join('');
+    const text = (content || '').trim();
+    if (!text) return { ok: false, error: 'empty', httpStatus: r.status, durationMs };
+    return { ok: true, text, model, durationMs };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e), durationMs: Date.now() - t0 };
+  }
+}
 
 // 测试服务:优先用消息里临时填的 baseURL/apiKey/model(用户还没点保存),
 // 否则回退 storage 里已存配置。只发一条 "Hello",不记录内容。

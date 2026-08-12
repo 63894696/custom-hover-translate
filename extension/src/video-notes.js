@@ -31,6 +31,8 @@
     _buffer: [],          // 待合并成段的碎笔记(按主题聚合)
     _recent: [],          // 最近几条笔记文本(给 LLM 上下文,判同主题)
     _lastFrameData: null, // 上一帧 dataURL(判画面是否变化)
+    _lastHash: null,      // 上一帧感知哈希(dHash,判内容是否实质变化)
+    _skipCount: 0,        // 连续跳过的静止帧数(省 token 计数)
   };
 
   // ---------- 工具 ----------
@@ -106,23 +108,54 @@
       system:
         '你是视频学习笔记助手,产出 HoverNotes 风格的结构化笔记。' +
         '看懂视频这一帧的画面(板书/幻灯片/讲解/字幕),结合前面已记的内容,提炼此刻的信息要点。' +
+        '注意:只在画面有实质变化时才会给你这一帧(静止帧已被自动跳过、不会重复给你),所以每条都应是新进展。' +
         '要求:' +
         '(1) 用目标语言写;' +
         '(2) 若画面有外语文字/术语,顺手译成目标语言,专业术语保留中英对照(如 能动性/Agency);' +
         '(3) 输出为简洁的要点(bullet),可加粗关键词;' +
         '(4) 若这一帧开启了新主题,先给一行小标题(形如「### 主题」);若延续前面主题则不要标题;' +
-        '(5) 只输出笔记正文,不要解释、不要时间戳、不要说"这是一帧"。',
+        '(5) 若这一帧与已记内容重复、没有新信息,只回复两个字:跳过;' +
+        '(6) 只输出笔记正文,不要解释、不要时间戳、不要说"这是一帧"。',
       user:
         `请基于这一帧和前面的笔记上下文,写一条结构化笔记(目标语言:${lang})。` +
-        `若是新主题给「### 标题」,否则直接给要点。一两句到三四个要点皆可,抓住此刻真正值得记的内容。` + ctx,
+        `这一帧相对上一帧已有变化,请提炼新进展:若是新主题给「### 标题」,否则直接给要点。` +
+        `若没有新信息可记,回复「跳过」。一两句到三四个要点皆可,抓住此刻真正值得记的内容。` + ctx,
     };
   }
 
-  // 帧画面是否变化(简单判:同尺寸下 dataURL 完全相同视为静止;更大跨度靠 LLM 上下文判断)
-  function frameChanged(dataUrl) {
-    const changed = dataUrl && dataUrl !== STATE._lastFrameData;
-    if (changed) STATE._lastFrameData = dataUrl;
-    return changed;
+  // ---------- 内容感知去重(RGB 像素均差):真实视频静止帧不发请求,省 token 让模型专注接续 ----------
+  // 原理:把帧缩到 32x32,逐像素对 R/G/B 三通道与上一帧求平均绝对差(meanAbsDiff)。≥ 阈值才算「内容实质变化」。
+  // 用三通道而非纯灰度:换背景色(深蓝→深绿)灰度可能同亮度判不出,但 RGB 通道差异立刻冲高,色相/明暗/结构全覆盖。
+  // 静止帧:JPEG 重编码噪点、captureStream 抖动只扰动个别像素 ±1-2,均差纹丝不动 → 稳定判「未变」。
+  // 只留一帧 3KB 采样缓冲,对幻灯片/板书这类「整片换色换内容」的场景最稳。
+  function frameSample(video) {
+    const W = 32, H = 32;
+    if (!STATE._hc) {
+      const c = document.createElement('canvas'); c.width = W; c.height = H;
+      STATE._hc = c; STATE._hcx = c.getContext('2d', { willReadFrequently: true });
+    }
+    try {
+      STATE._hcx.drawImage(video, 0, 0, W, H);
+      return STATE._hcx.getImageData(0, 0, W, H).data; // Uint8ClampedArray,RGBA 长度 W*H*4
+    } catch (e) { return null; } // 跨域污染 → 交给 captureFrame 报错路径
+  }
+  function meanAbsDiffRGB(a, b) {
+    if (!a || !b || a.length !== b.length) return 999;
+    let s = 0, n = 0;
+    for (let i = 0; i < a.length; i += 4) { s += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]); n += 3; }
+    return s / n;
+  }
+  // 与上一帧内容是否实质不同(RGB 均差 ≥ PIXEL_DIFF_THRESHOLD 才算变化)。
+  // 实测参考:同一张微噪 ≈ 0-2;换背景色(同亮度不同色)≈ 15-25;翻页/正文大变 ≈ 30+。取 8 为界,兼顾防抖与灵敏。
+  const PIXEL_DIFF_THRESHOLD = 8;
+  function contentChanged(video) {
+    const g = frameSample(video);
+    if (!g) return true; // 采样失败就放行(不阻塞)
+    if (!STATE._lastHash) { STATE._lastHash = g; return true; }
+    const dist = meanAbsDiffRGB(g, STATE._lastHash);
+    if (dist >= PIXEL_DIFF_THRESHOLD) { STATE._lastHash = g; STATE._skipCount = 0; return true; }
+    STATE._skipCount++;
+    return false;
   }
 
   // ---------- 调多模态(经 background 的 vision-note,走用户已配置的 OpenAI 兼容端点) ----------
@@ -141,7 +174,16 @@
         resp && resp.needConfig ? '未配置端点(设置里填)' :
         resp && resp.ok && resp.text ? '已记 ' + (STATE.notes.length + 1) + ' 条' :
         '识别失败(' + ((resp && (resp.error || resp.httpStatus)) || 'empty') + ')');
-      if (resp && resp.ok && resp.text) return resp.text.trim();
+      if (resp && resp.ok && resp.text) {
+        const txt = resp.text.trim();
+        // 模型判断本帧无新信息 → 跳过,不记入笔记(省的是「写入噪音」,请求已发生)
+        if (/^跳过[。.!]*$/.test(txt) || txt === '跳过') {
+          STATE.status = 'working'; applyLamp();
+          setStatus('本帧无新信息,跳过');
+          return null;
+        }
+        return txt;
+      }
       return null;
     } catch (e) {
       setStatusState('error', '请求异常(网络?)');
@@ -271,10 +313,17 @@
     if (!video || video.paused || video.ended) { setStatus('已暂停(播放视频继续记)'); return; }
     STATE.busy = true;
     try {
+      // 内容感知去重:画面没实质变化(静止/同一主题延续)就跳过,不发请求省 token。
+      // 真实视频里大量时间画面静止,这一步挡掉绝大多数重复请求;模型把时间花在真正的新内容上。
+      if (!contentChanged(video)) {
+        STATE.status = 'working'; applyLamp(); // 仍在工作,只是本帧无需记
+        setStatus('画面未变,跳过(已省 ' + STATE._skipCount + ' 次)');
+        return;
+      }
       const t = video.currentTime;
       const frame = captureFrame(video);
       if (!frame) { setStatusState('error', '帧不可读(可能跨域媒体)'); return; }
-      frameChanged(frame);
+      STATE._lastFrameData = frame;
       const text = await analyzeFrame(frame, t);
       if (text) { addNote(t, text); }
     } finally {

@@ -50,9 +50,10 @@ cuechange → 双语 overlay   → dataURL(jpeg)
 
 ### 2.2 帧笔记(`CT_VNOTES`)
 - **抽帧**:`captureFrame` 用离屏 canvas `drawImage(video)` → `toDataURL('image/jpeg', .72)`,最长边压到 `maxW`(默认 512)省 token。**跨域污染媒体(无 CORS 头)会抛 SecurityError → 返回 null 跳过**,字幕轨不受影响。
-- **笔记提示词**:`buildNotePrompt` 与纯翻译**分离**——系统提示要求"看懂画面、提炼要点、顺手译外语文字",只输出笔记正文。这正是 HoverNotes 缺的另一半。
+- **笔记提示词(结构化)**:`buildNotePrompt` 与纯翻译**分离**,对齐 HoverNotes 基线——系统提示要求「看懂画面+结合前面已记上下文,提炼要点」「新主题给 `### 标题`,延续主题不给」「外语术语中英对照」「bullet 要点+加粗关键词」。`_recent`(最近 4 条)作为上下文喂入,供 LLM 判断主题是否延续。这正是 HoverNotes 缺的另一半。
+- **状态机(交通灯)**:`idle(灰) → starting(黄,接指令/请求在飞,脉动) → working(绿,成功出笔记) → error(红)`。`setStatusState` 驱动;`onStatus(fn)` 订阅让 video-study 悬浮按钮灯与面板头灯**双灯同步**。`statusFromResponse` 由 vision-note 返回推断(needConfig/error/empty→红,ok→绿),网络延迟期间停在黄灯,让用户一眼看懂卡在准备还是已在工作。
 - **节奏**:`intervalMs`(默认 8s)定时 `tick`,播放中才抽,`busy` 单帧在飞防并发。
-- **侧栏**:右上 `.ct-vnotes-panel`,每条 `[时间戳] 笔记正文`,时间戳可点击 `video.currentTime = t` 跳回。
+- **侧栏**:右上 `.ct-vnotes-panel`,头部含状态灯 + 已记条数;`addNote` 解析 LLM 输出的 `### 标题` → 渲染分段标题(`ct-vnotes-heading`),正文 bullet 渲染加粗;每条 `[时间戳] 笔记正文`,时间戳可点击 `video.currentTime = t` 跳回。
 
 ### 2.3 统一入口(`CT_VSTUDY`)
 - **悬浮按钮**:`mousemove` 检测悬停视频 → 视频右上角浮出「✎ 视频学习」圆钮(HoverNotes 同款触发)。
@@ -106,25 +107,36 @@ POST {baseURL}/chat/completions
 
 ---
 
-## 5. 导出 Markdown 格式
+## 5. 导出 Markdown 格式(HoverNotes 风格,带 YAML frontmatter)
 
 ```markdown
+---
+title: "视频标题"
+source: https://...
+created: "2026-08-12"
+tags:
+  - hover-notes
+---
+
 # 视频标题
 
 - 来源: https://...
 - 导出时间: 2026-08-12 11:00:00
 - 笔记条数: 12
 
----
+### Chapter 1: Vectors(向量)
 
-- **[00:00](https://...?t=0s)** 本章介绍向量概念:向量是既有大小又有方向的量。
-- **[00:10](https://...?t=10s)** 点积衡量两个向量的对齐程度。
+- **[00:00](https://...?t=0s)** - **向量(Vector)**:同时具有**大小(Magnitude)**和**方向(Direction)**的物理量
+- **[00:10](https://...?t=10s)** - 大小 = 长度(Length),即向量的数值量度
+
+### Chapter 2: Matrices
+
 - **[00:20](https://...?t=20s)** [截图]
 
 > 由 Prisir 视频学习生成(双语字幕 + AI 帧笔记)
 ```
 
-时间戳链接带 `?t=秒数`,在支持的平台(YouTube 等)可直接定位;本页内点击侧栏时间戳则直接 `video.currentTime` 跳转。
+有分段标题(`n.heading`)先出 `### 标题`,再出带时间戳的要点;内联标题在导出时剥离只留正文。时间戳链接带 `?t=秒数`,在支持的平台(YouTube 等)可直接定位;本页内点击侧栏时间戳则直接 `video.currentTime` 跳转。
 
 ---
 
@@ -148,6 +160,7 @@ POST {baseURL}/chat/completions
 
 ## 8. E2E 验证(2026-08-12 实机,SecBrowser CDP)
 
+### 8.1 双模基础(`tests/_vstudy_e2e.py`)
 | 项 | 结果 | 证据 |
 |---|---|---|
 | 三模块注入 | ✅ | `{vstudy,vnotes,subs: object}` |
@@ -159,4 +172,16 @@ POST {baseURL}/chat/completions
 | 面板控制条 | ✅ | 字幕开关/截图/⬇MD |
 | Markdown 导出 | ✅ | `downloadMarkdown` 可用 |
 
-截图:`tests/_vstudy_dual.jpg`、`tests/_notes_panel.jpg`。
+### 8.2 交通灯 + 结构化笔记(`tests/_vlight_e2e.py`,8/8 通过)
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 状态机 idle→starting(黄) | ✅ | `lamp_initial: {status:starting, lamp:starting}` |
+| 状态机 →working(绿) | ✅ | `final: {status:working, lamp:working}` |
+| 转换次序 starting→working | ✅ | `trace: [idle→starting→working→starting→working]`(每帧请求在飞回黄,出笔记回绿) |
+| 面板灯 + FAB 灯双灯同步 | ✅ | `fab_lamp: working` |
+| 结构化笔记(### 标题) | ✅ | `headings: ["Chapter 1: Vectors(向量)", ...]` |
+| bullet 要点 + 加粗关键词 | ✅ | `- **向量(Vector)**:同时具有**大小(Magnitude)**…` |
+| 术语中英对照 | ✅ | `向量(Vector)/大小(Magnitude)/方向(Direction)` |
+| Markdown 导出(YAML+###) | ✅ | frontmatter `tags: hover-notes` + `### 分段` |
+
+截图:`tests/_vstudy_dual.jpg`、`tests/_notes_panel.jpg`、`tests/_vlight_notes.jpg`(绿灯+分段标题+bullet 加粗)。

@@ -24,8 +24,13 @@
     intervalMs: 8000,     // 抽帧间隔(原型的省 token 档;可调)
     maxW: 512,            // 抽帧最长边(压缩省 token)
     busy: false,          // 单帧在飞,跳过并防并发
-    notes: [],            // [{t, text}] 已生成笔记
+    notes: [],            // [{t, text, heading?}] 已生成笔记
     minIntervalBetweenNotes: 8000,
+    status: 'idle',       // 状态机:idle|starting|working|error(驱动交通灯)
+    _listeners: [],       // 状态订阅(video-study 悬浮按钮灯)
+    _buffer: [],          // 待合并成段的碎笔记(按主题聚合)
+    _recent: [],          // 最近几条笔记文本(给 LLM 上下文,判同主题)
+    _lastFrameData: null, // 上一帧 dataURL(判画面是否变化)
   };
 
   // ---------- 工具 ----------
@@ -69,21 +74,62 @@
     }
   }
 
-  // ---------- 笔记提示词(与纯翻译分离:这是 HoverNotes 缺的另一半) ----------
-  function buildNotePrompt(dstLang) {
+  // ---------- 状态机(驱动交通灯) ----------
+  // idle(灰) → starting(黄,接指令/请求在飞) → working(绿,成功出笔记) → error(红,出错/缺配置)
+  function setStatusState(s, txt) {
+    STATE.status = s;
+    if (txt) setStatus(txt);
+    for (const fn of STATE._listeners) { try { fn(s); } catch (e) {} }
+    applyLamp();
+  }
+  function onStatus(fn) { STATE._listeners.push(fn); }
+  function applyLamp() {
+    const lamp = STATE.panel && STATE.panel.querySelector('[data-role="lamp"]');
+    if (lamp) lamp.setAttribute('data-s', STATE.status);
+  }
+  // 由 vision-note 的返回推断状态(needConfig / error / empty → 红;ok → 绿)
+  function statusFromResponse(resp) {
+    if (resp && resp.ok && resp.text) return 'working';
+    if (resp && resp.needConfig) return 'error';
+    if (resp && resp.error) return 'error';
+    return 'error';
+  }
+
+  // ---------- 笔记提示词(结构化,对齐 HoverNotes 基线:分段标题+要点+关键洞察) ----------
+  // 与纯翻译分离:不是逐句翻译,而是看懂画面+上下文,提炼成 HoverNotes 那种结构化笔记。
+  function buildNotePrompt(dstLang, recent) {
     const lang = dstLang || '中文';
+    const ctx = recent && recent.length
+      ? `\n\n【前面已记的笔记(判断是否在讲同一主题)】\n` + recent.map((r, i) => `${i + 1}. ${r}`).join('\n')
+      : '';
     return {
-      system: '你是视频笔记助手。看懂视频帧画面,提炼这一时刻的要点,用目标语言写一条简洁笔记。' +
-              '只输出笔记正文,不要解释、不要前后缀、不要时间戳、不要复述"这是一帧"。' +
-              '若画面有外语文字/板书/字幕,顺手译成目标语言并融入要点。',
-      user: `请基于这一帧写一条笔记(目标语言:${lang})。要求:一句话到两句话,抓住此刻信息要点。`,
+      system:
+        '你是视频学习笔记助手,产出 HoverNotes 风格的结构化笔记。' +
+        '看懂视频这一帧的画面(板书/幻灯片/讲解/字幕),结合前面已记的内容,提炼此刻的信息要点。' +
+        '要求:' +
+        '(1) 用目标语言写;' +
+        '(2) 若画面有外语文字/术语,顺手译成目标语言,专业术语保留中英对照(如 能动性/Agency);' +
+        '(3) 输出为简洁的要点(bullet),可加粗关键词;' +
+        '(4) 若这一帧开启了新主题,先给一行小标题(形如「### 主题」);若延续前面主题则不要标题;' +
+        '(5) 只输出笔记正文,不要解释、不要时间戳、不要说"这是一帧"。',
+      user:
+        `请基于这一帧和前面的笔记上下文,写一条结构化笔记(目标语言:${lang})。` +
+        `若是新主题给「### 标题」,否则直接给要点。一两句到三四个要点皆可,抓住此刻真正值得记的内容。` + ctx,
     };
+  }
+
+  // 帧画面是否变化(简单判:同尺寸下 dataURL 完全相同视为静止;更大跨度靠 LLM 上下文判断)
+  function frameChanged(dataUrl) {
+    const changed = dataUrl && dataUrl !== STATE._lastFrameData;
+    if (changed) STATE._lastFrameData = dataUrl;
+    return changed;
   }
 
   // ---------- 调多模态(经 background 的 vision-note,走用户已配置的 OpenAI 兼容端点) ----------
   async function analyzeFrame(dataUrl, t) {
     const dstLang = (self.CT_LANGS && self.CT_LANGS.guessTargetLang && self.CT_LANGS.guessTargetLang()) || 'zh';
-    const { system, user } = buildNotePrompt(dstLang === 'zh' ? '中文' : dstLang);
+    const { system, user } = buildNotePrompt(dstLang === 'zh' ? '中文' : dstLang, STATE._recent.slice(-4));
+    setStatusState('starting', '识别 ' + fmtTime(t) + ' …');
     try {
       const resp = await chrome.runtime.sendMessage({
         type: 'vision-note',
@@ -91,9 +137,14 @@
         system, user,
         maxTokens: 700,
       });
+      setStatusState(statusFromResponse(resp),
+        resp && resp.needConfig ? '未配置端点(设置里填)' :
+        resp && resp.ok && resp.text ? '已记 ' + (STATE.notes.length + 1) + ' 条' :
+        '识别失败(' + ((resp && (resp.error || resp.httpStatus)) || 'empty') + ')');
       if (resp && resp.ok && resp.text) return resp.text.trim();
       return null;
     } catch (e) {
+      setStatusState('error', '请求异常(网络?)');
       return null;
     }
   }
@@ -105,8 +156,9 @@
     panel.className = 'ct-vnotes-panel';
     panel.innerHTML =
       '<div class="ct-vnotes-head">' +
+      '  <span class="ct-vnotes-lamp" data-role="lamp" data-s="idle" title="状态"></span>' +
       '  <span class="ct-vnotes-title">视频笔记</span>' +
-      '  <span class="ct-vnotes-status" data-role="status">抽帧中…</span>' +
+      '  <span class="ct-vnotes-status" data-role="status">待启动</span>' +
       '  <button class="ct-vnotes-btn" data-role="export" title="复制全部笔记">复制</button>' +
       '  <button class="ct-vnotes-btn" data-role="close" title="停止并关闭">×</button>' +
       '</div>' +
@@ -126,7 +178,22 @@
   }
 
   function addNote(t, text) {
-    STATE.notes.push({ t, text });
+    // 解析 LLM 输出的「### 标题」分段(HoverNotes 风格)
+    let heading = null, body = text;
+    const m = text.match(/^\s*#{1,4}\s*(.+?)\s*\n+([\s\S]*)$/);
+    if (m) { heading = m[1].trim(); body = (m[2] || '').trim(); }
+    if (!body) body = text.replace(/^\s*#{1,4}\s*.+?\n*/, '').trim() || text;
+
+    STATE.notes.push({ t, text, heading });
+    STATE._recent.push(body);
+    if (STATE._recent.length > 6) STATE._recent.shift();
+
+    if (heading) {
+      const h = document.createElement('div');
+      h.className = 'ct-vnotes-heading';
+      h.textContent = heading;
+      STATE.list.appendChild(h);
+    }
     const item = document.createElement('div');
     item.className = 'ct-vnotes-item';
     const ts = document.createElement('button');
@@ -136,13 +203,20 @@
     ts.addEventListener('click', () => {
       if (STATE.video) { STATE.video.currentTime = t; STATE.video.play && STATE.video.play().catch(()=>{}); }
     });
-    const body = document.createElement('div');
-    body.className = 'ct-vnotes-text';
-    body.textContent = text;
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'ct-vnotes-text';
+    // 简易渲染:**bold** → <b>,换行保留
+    bodyEl.innerHTML = escapeHtml(body)
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/\n+/g, '<br>');
     item.appendChild(ts);
-    item.appendChild(body);
+    item.appendChild(bodyEl);
     STATE.list.appendChild(item);
     STATE.list.scrollTop = STATE.list.scrollHeight;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   function exportNotes() {
@@ -167,6 +241,15 @@
 .ct-vnotes-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid rgba(242,237,226,.12)}
 .ct-vnotes-title{font-weight:600;color:#e0a866;flex:0 0 auto}
 .ct-vnotes-status{flex:1;font-size:11px;color:#9aa3b2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 交通灯:idle灰 / starting黄(脉动) / working绿 / error红 */
+.ct-vnotes-lamp{flex:0 0 auto;width:11px;height:11px;border-radius:50%;background:#5a636f;
+  box-shadow:0 0 0 2px rgba(255,255,255,.06);transition:background .2s}
+.ct-vnotes-lamp[data-s="starting"]{background:#e8b23c;animation:ct-lamp-pulse 1s ease-in-out infinite}
+.ct-vnotes-lamp[data-s="working"]{background:#3fbf7f;box-shadow:0 0 6px rgba(63,191,127,.7)}
+.ct-vnotes-lamp[data-s="error"]{background:#e05252;box-shadow:0 0 6px rgba(224,82,82,.6)}
+@keyframes ct-lamp-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.ct-vnotes-heading{padding:8px 12px 2px;color:#e0a866;font-weight:700;font-size:12.5px;
+  border-top:1px solid rgba(224,168,102,.18);margin-top:4px}
 .ct-vnotes-btn{background:rgba(47,143,131,.2);color:#4fb3a4;border:1px solid rgba(79,179,164,.35);
   border-radius:6px;padding:2px 8px;cursor:pointer;font-size:12px}
 .ct-vnotes-btn:hover{background:rgba(47,143,131,.4)}
@@ -190,11 +273,10 @@
     try {
       const t = video.currentTime;
       const frame = captureFrame(video);
-      if (!frame) { setStatus('帧不可读(可能跨域媒体)'); return; }
-      setStatus('识别 ' + fmtTime(t) + ' …');
+      if (!frame) { setStatusState('error', '帧不可读(可能跨域媒体)'); return; }
+      frameChanged(frame);
       const text = await analyzeFrame(frame, t);
-      if (text) { addNote(t, text); setStatus('已记 ' + STATE.notes.length + ' 条'); }
-      else setStatus('本条无结果(继续)');
+      if (text) { addNote(t, text); }
     } finally {
       STATE.busy = false;
     }
@@ -203,14 +285,14 @@
   // ---------- 启动/停止 ----------
   async function start({ intervalMs = 8000, maxW = 512 } = {}) {
     const video = findPrimaryVideo();
-    if (!video) return { ok: false, reason: 'no_video' };
+    if (!video) { setStatusState('error', '没找到视频'); return { ok: false, reason: 'no_video' }; }
     STATE.video = video;
     STATE.intervalMs = Math.max(3000, intervalMs | 0);
     STATE.maxW = Math.max(256, maxW | 0);
     ensurePanel();
     if (STATE.running) return { ok: true, already: true };
     STATE.running = true;
-    setStatus('抽帧中…(每 ' + Math.round(STATE.intervalMs / 1000) + 's)');
+    setStatusState('starting', '启动中…(每 ' + Math.round(STATE.intervalMs / 1000) + 's 抽一帧)');
     // 立即记一条,再进入定时间隔
     tick();
     STATE.timer = setInterval(tick, STATE.intervalMs);
@@ -220,6 +302,7 @@
   function stop() {
     STATE.running = false;
     if (STATE.timer) { clearInterval(STATE.timer); STATE.timer = null; }
+    setStatusState('idle', '已停止');
     if (STATE.panel && STATE.panel.parentNode) STATE.panel.parentNode.removeChild(STATE.panel);
     STATE.panel = null;
     STATE.list = null;
@@ -229,6 +312,8 @@
     start,
     stop,
     captureFrame,
+    onStatus,
+    buildNotePrompt,   // 导出供测试
     _state: STATE, // 调试用
   };
 })();

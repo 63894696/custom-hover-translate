@@ -31,8 +31,15 @@
     _buffer: [],          // 待合并成段的碎笔记(按主题聚合)
     _recent: [],          // 最近几条笔记文本(给 LLM 上下文,判同主题)
     _lastFrameData: null, // 上一帧 dataURL(判画面是否变化)
-    _lastHash: null,      // 上一帧感知哈希(dHash,判内容是否实质变化)
+    _lastHash: null,      // 上一帧采样(RGB 均差,判内容是否实质变化)
     _skipCount: 0,        // 连续跳过的静止帧数(省 token 计数)
+    // ① 防模型空转:暂停/卡顿检测(网络卡 vs 用户暂停 vs 假性播放)
+    _stallWatch: null,    // stall 监视定时器
+    _lastT: -1,           // 上一次的 currentTime(判假性播放:不 pause 但时间不走)
+    _lastTChange: 0,      // currentTime 最近一次变化的时间戳(ms)
+    _pausedSince: 0,      // video.paused 持续起点(ms);0=未暂停
+    _stallAsked: false,   // 是否已弹过「是否继续」询问(避免反复弹)
+    _stallBar: null,      // 面板询问条 DOM
   };
 
   // ---------- 工具 ----------
@@ -302,15 +309,137 @@
   font:11px ui-monospace,monospace;margin-top:1px}
 .ct-vnotes-ts:hover{background:rgba(201,138,75,.4)}
 .ct-vnotes-text{flex:1;color:#f2ede2;word-break:break-word}
+/* ① 暂停/卡顿询问条(非模态) */
+.ct-vnotes-stallbar{margin:6px 10px;padding:10px 12px;border:1px solid rgba(232,178,60,.4);
+  border-radius:10px;background:rgba(232,178,60,.08)}
+.ct-vnotes-stall-msg{font-size:12.5px;color:#f2ede2;line-height:1.5;margin-bottom:8px}
+.ct-vnotes-stall-btns{display:flex;gap:8px}
+.ct-vnotes-stall-btn{flex:1;border-radius:6px;padding:5px 0;cursor:pointer;font-size:12px;border:1px solid}
+.ct-vnotes-stall-btn.go{background:rgba(63,191,127,.18);color:#3fbf7f;border-color:rgba(63,191,127,.4)}
+.ct-vnotes-stall-btn.go:hover{background:rgba(63,191,127,.34)}
+.ct-vnotes-stall-btn.halt{background:rgba(224,82,82,.14);color:#e05252;border-color:rgba(224,82,82,.4)}
+.ct-vnotes-stall-btn.halt:hover{background:rgba(224,82,82,.3)}
 `;
     document.documentElement.appendChild(st);
+  }
+
+  // ---------- ① 防模型空转:暂停/卡顿监视 ----------
+  // 三种「没在播」要区分对待(都不发请求,但对用户的态度不同):
+  //   · 网络缓冲(!paused 但 readyState 低 / currentTime 不动):暂时现象,切黄灯提示,不打扰。
+  //   · 用户暂停(paused):可能离开也可能在思考。给宽限 PAUSE_GRACE_MS,超时切灰灯 + 弹「是否继续」。
+  //   · 假性播放(!paused 且 readyState 够但 currentTime 长期不动):同网络卡处理。
+  // 目的:暂停期间不空转模型(本就不发请求),更不让用户以为「还在记」——状态可见 + 超时主动询问。
+  const STALL_CHECK_MS = 5000;      // 每 5s 查一次
+  const PAUSE_GRACE_MS = 90000;     // 用户暂停宽限 90s(思考/暂停记笔记是正常),超时才弹询问
+  const BUFFER_HINT_MS = 8000;      // 网络卡超过 8s 才在状态栏提示(短暂缓冲不打扰)
+
+  function nowMs() { return Date.now(); }
+
+  function startStallWatch() {
+    stopStallWatch();
+    STATE._lastT = STATE.video ? STATE.video.currentTime : -1;
+    STATE._lastTChange = nowMs();
+    STATE._pausedSince = (STATE.video && STATE.video.paused) ? nowMs() : 0;
+    STATE._stallAsked = false;
+    STATE._stallWatch = setInterval(checkStall, STALL_CHECK_MS);
+  }
+  function stopStallWatch() {
+    if (STATE._stallWatch) { clearInterval(STATE._stallWatch); STATE._stallWatch = null; }
+    removeStallBar();
+  }
+
+  function checkStall() {
+    const v = STATE.video;
+    if (!STATE.running || !v) return;
+    const now = nowMs();
+
+    // currentTime 是否在前走(真性播放的判据)
+    if (v.currentTime !== STATE._lastT) {
+      STATE._lastT = v.currentTime;
+      STATE._lastTChange = now;
+      if (STATE._stallAsked) { removeStallBar(); STATE._stallAsked = false; } // 恢复播放 → 撤掉询问
+    }
+    if (v.paused) {
+      if (!STATE._pausedSince) STATE._pausedSince = now;
+    } else {
+      STATE._pausedSince = 0;
+    }
+
+    const pausedFor = STATE._pausedSince ? now - STATE._pausedSince : 0;
+    const noProgressFor = now - STATE._lastTChange;
+
+    if (v.ended) { setStatusState('idle', '播放结束'); return; }
+
+    // 分支一:用户主动暂停
+    if (v.paused) {
+      if (pausedFor >= PAUSE_GRACE_MS) {
+        // 暂停较久:切灰(不耗电/不装忙)+ 弹「是否继续」
+        STATE.status = 'idle'; applyLamp();
+        setStatus('已暂停 ' + Math.round(pausedFor / 60000) + ' 分钟');
+        showStallBar('视频已暂停较久,模型没有空转。要继续记笔记吗?', pausedFor);
+      } else {
+        // 宽限内:保持现状,状态栏提示
+        STATE.status = 'idle'; applyLamp();
+        setStatus('已暂停(继续播放即恢复记)');
+      }
+      return;
+    }
+
+    // 分支二:未暂停但没进展(网络缓冲 / 假性播放)
+    if (noProgressFor >= BUFFER_HINT_MS) {
+      // readyState < 3 是没数据(网络卡);>= 3 是假性播放(极少见)
+      const why = v.readyState < 3 ? '缓冲中(网络慢)' : '画面停滞';
+      STATE.status = 'starting'; applyLamp(); // 黄灯:在等数据,不是出错
+      setStatus(why + ' ' + Math.round(noProgressFor / 1000) + 's,未发请求');
+      // 卡得特别久(达到暂停宽限)也给一次询问,让用户决定等还是停
+      if (noProgressFor >= PAUSE_GRACE_MS) {
+        showStallBar('视频长时间没有进展(可能网络较慢)。要继续等并记笔记吗?', noProgressFor);
+      }
+      return;
+    }
+
+    // 正常播放中:清除询问条(若曾弹过)
+    if (STATE._stallAsked) { removeStallBar(); STATE._stallAsked = false; }
+  }
+
+  // 面板内非模态询问条(不用浏览器 alert:会打断且 MV3 content 体验差)
+  function showStallBar(msg, forMs) {
+    if (!STATE.panel) return;
+    if (STATE._stallBar && document.contains(STATE._stallBar)) { return; } // 已显示
+    const bar = document.createElement('div');
+    bar.className = 'ct-vnotes-stallbar';
+    bar.innerHTML =
+      '<div class="ct-vnotes-stall-msg">' + escapeHtml(msg) + '</div>' +
+      '<div class="ct-vnotes-stall-btns">' +
+      '  <button class="ct-vnotes-stall-btn go" data-role="go">继续</button>' +
+      '  <button class="ct-vnotes-stall-btn halt" data-role="halt">停止</button>' +
+      '</div>';
+    // 插在列表上方
+    if (STATE.list && STATE.list.parentNode) STATE.list.parentNode.insertBefore(bar, STATE.list);
+    else STATE.panel.appendChild(bar);
+    STATE._stallBar = bar;
+    STATE._stallAsked = true;
+    bar.querySelector('[data-role="go"]').addEventListener('click', () => {
+      // 继续:重置计时与暂停起点,若视频其实可播则尝试播放
+      STATE._lastTChange = nowMs();
+      STATE._pausedSince = STATE.video && STATE.video.paused ? nowMs() : 0;
+      if (STATE.video && STATE.video.paused) { try { STATE.video.play().catch(() => {}); } catch (e) {} }
+      removeStallBar(); STATE._stallAsked = false;
+      STATE.status = 'working'; applyLamp();
+      setStatus('继续记笔记');
+    });
+    bar.querySelector('[data-role="halt"]').addEventListener('click', () => { stop(); });
+  }
+  function removeStallBar() {
+    if (STATE._stallBar && STATE._stallBar.parentNode) STATE._stallBar.parentNode.removeChild(STATE._stallBar);
+    STATE._stallBar = null;
   }
 
   // ---------- 抽帧主循环 ----------
   async function tick() {
     if (!STATE.running || STATE.busy) return;
     const video = STATE.video;
-    if (!video || video.paused || video.ended) { setStatus('已暂停(播放视频继续记)'); return; }
+    if (!video || video.paused || video.ended) { return; } // stall 监视统一管暂停态,这里静默跳过不刷状态
     STATE.busy = true;
     try {
       // 内容感知去重:画面没实质变化(静止/同一主题延续)就跳过,不发请求省 token。
@@ -345,12 +474,14 @@
     // 立即记一条,再进入定时间隔
     tick();
     STATE.timer = setInterval(tick, STATE.intervalMs);
+    startStallWatch();   // ① 启动暂停/卡顿监视(防空转 + 超时询问)
     return { ok: true };
   }
 
   function stop() {
     STATE.running = false;
     if (STATE.timer) { clearInterval(STATE.timer); STATE.timer = null; }
+    stopStallWatch();    // ① 停监视 + 撤询问条
     setStatusState('idle', '已停止');
     if (STATE.panel && STATE.panel.parentNode) STATE.panel.parentNode.removeChild(STATE.panel);
     STATE.panel = null;

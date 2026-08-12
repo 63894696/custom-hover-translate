@@ -38,7 +38,7 @@
     removeButton();
     const btn = document.createElement('button');
     btn.className = 'ct-vstudy-fab';
-    btn.innerHTML = '<span class="ct-vstudy-fab-ico">✎</span><span>视频学习</span>';
+    btn.innerHTML = '<span class="ct-vstudy-lamp" data-role="lamp" data-s="idle"></span><span class="ct-vstudy-fab-ico">✎</span><span>视频学习</span>';
     btn.title = '双语字幕 + AI 视频笔记(一键开启)';
     btn.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
     document.documentElement.appendChild(btn);
@@ -46,8 +46,18 @@
     positionButton(video);
     btn.addEventListener('mouseenter', () => btn.classList.add('ct-vstudy-fab-show'));
     btn.addEventListener('mouseleave', () => { if (!STATE.active) btn.classList.remove('ct-vstudy-fab-show'); });
+    // 订阅帧笔记状态 → 悬浮按钮交通灯(黄=启动/请求,绿=工作,红=出错)
+    if (hasNotes() && typeof self.CT_VNOTES.onStatus === 'function' && !STATE._lampBound) {
+      STATE._lampBound = true;
+      self.CT_VNOTES.onStatus(setFabLamp);
+    }
     injectStyle();
     return btn;
+  }
+
+  function setFabLamp(s) {
+    const lamp = STATE.btn && STATE.btn.querySelector('[data-role="lamp"]');
+    if (lamp) lamp.setAttribute('data-s', s);
   }
 
   function positionButton(video) {
@@ -190,11 +200,14 @@
     const title = document.title || '视频笔记';
     const url = location.href;
     const date = new Date().toISOString().slice(0, 19).replace('T', ' ');
-    let md = `# ${title}\n\n`;
-    md += `- 来源: ${url}\n- 导出时间: ${date}\n- 笔记条数: ${notes.length}\n\n---\n\n`;
+    let md = `---\ntitle: "${title.replace(/"/g, '\\"')}"\nsource: ${url}\ncreated: "${date.slice(0, 10)}"\ntags:\n  - hover-notes\n---\n\n`;
+    md += `# ${title}\n\n- 来源: ${url}\n- 导出时间: ${date}\n- 笔记条数: ${notes.length}\n\n`;
     for (const n of notes) {
+      // 结构化:有分段标题先出标题,再出带时间戳的要点(HoverNotes 风格)
+      if (n.heading) md += `\n### ${n.heading}\n\n`;
       const link = url + (url.includes('?') ? '&' : '?') + 't=' + Math.floor(n.t) + 's';
-      md += `- **[${fmt(n.t)}](${link})** ${n.text}\n`;
+      const body = (n.text || '').replace(/^\s*#{1,4}\s*.+?\n+/, ''); // 去掉内联标题,只留正文
+      md += `- **[${fmt(n.t)}](${link})** ${body}\n`;
     }
     md += '\n> 由 Prisir 视频学习生成(双语字幕 + AI 帧笔记)\n';
     return md;
@@ -232,6 +245,10 @@
 .ct-vstudy-fab-show{opacity:1;pointer-events:auto;transform:translateY(0)}
 .ct-vstudy-fab-on{background:rgba(47,143,131,.92);border-color:rgba(79,179,164,.6);color:#f2ede2}
 .ct-vstudy-fab-ico{font-size:14px}
+.ct-vstudy-lamp{flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:#5a636f;transition:background .2s}
+.ct-vstudy-lamp[data-s="starting"]{background:#e8b23c;animation:ct-lamp-pulse 1s ease-in-out infinite}
+.ct-vstudy-lamp[data-s="working"]{background:#3fbf7f;box-shadow:0 0 5px rgba(63,191,127,.7)}
+.ct-vstudy-lamp[data-s="error"]{background:#e05252}
 .ct-vstudy-ctlbar{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid rgba(242,237,226,.12);
   background:rgba(255,255,255,.02)}
 .ct-vstudy-btn{flex:1;background:rgba(201,138,75,.16);color:#e0a866;border:1px solid rgba(224,168,102,.35);

@@ -45,9 +45,6 @@
     "http://127.0.0.1:12308/*",
     "http://localhost:12308/*"
   ],
-  "externally_connectable": {
-    "matches": ["*://*.babelspan.com/*", "*://babelspan.com/*", "http://127.0.0.1/*", "http://localhost/*"]
-  },
   "optional_host_permissions": [
     "https://*/*",
     "http://*/*"

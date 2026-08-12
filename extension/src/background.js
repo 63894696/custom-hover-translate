@@ -423,3 +423,110 @@ async function forwardToContent(tabId, payload) {
   }
   if (!ok) console.warn('[CT] forward finally failed for tab', tabId, payload.type);
 }
+
+// ================= babelspan 内容柜联动(网页 → 插件,复用用户已配模型 KEY) =================
+// 网页(shelf.html)经 chrome.runtime.sendMessage(EXT_ID, …) 调这里。
+// 海报候选源用国内可达的百度图片(免 key);挑选走用户已配置的 OpenAI 兼容多模态端点。
+// 隐私:KEY/baseURL 只读自用,不出本机;候选图仅经用户配置的端点。
+chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
+  const url = (sender && sender.url) || '';
+  const fromShelf = /^https?:\/\/([^/]+\.)?babelspan\.com\//.test(url) || /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/)/.test(url);
+  if (!fromShelf) return false; // 只响应 babelspan / 本地调试页
+  if (!msg || !msg.type) return false;
+  if (msg.type === 'shelf-ping') { sendResponse({ ok: true }); return false; }
+  if (msg.type === 'shelf-poster') {
+    handleShelfPoster(msg)
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
+    return true; // 异步
+  }
+  return false;
+});
+
+// 抓百度图片候选(国内可达、免 key)。返回 [{thumb, url}]。
+async function baiduImageCandidates(query, want) {
+  const endpoint = 'https://image.baidu.com/search/acjson?tn=resultjson_com&ipn=rj&pn=0&rn='
+    + (want || 6) + '&word=' + encodeURIComponent(query);
+  const r = await fetch(endpoint, { headers: { 'Accept': 'application/json' } });
+  if (!r.ok) throw new Error('baidu HTTP ' + r.status);
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { // 百度有时返回带 XSSI 前缀/末尾的 JSON,做粗清理
+    const s = text.indexOf('{'); const e2 = text.lastIndexOf('}');
+    data = JSON.parse(text.slice(s, e2 + 1));
+  }
+  const arr = (data && data.data) || [];
+  const out = [];
+  for (const it of arr) {
+    const thumb = it && (it.thumbURL || it.middleURL || it.hoverURL);
+    const orig = it && (it.objURL || it.replaceUrl && it.replaceUrl[0] && it.replaceUrl[0].ObjURL);
+    const u = thumb || orig;
+    if (u && /^https?:\/\//.test(u)) out.push({ thumb: u, url: orig || u });
+    if (out.length >= (want || 6)) break;
+  }
+  return out;
+}
+
+// 把一张远程图拉成 dataURL(供多模态端点)。失败返回 null。
+async function imageUrlToDataUrl(u) {
+  try {
+    const r = await fetch(u);
+    if (!r.ok) return null;
+    const blob = await r.blob();
+    const buf = await blob.arrayBuffer();
+    let bin = ''; const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    const mime = blob.type || 'image/jpeg';
+    return 'data:' + mime + ';base64,' + btoa(bin);
+  } catch { return null; }
+}
+
+// 调用户已配多模态端点:给一张图 + 文本,取回文本。复用 handleVisionNote 的端点解析。
+async function visionPick(imageDataUrl, system, user) {
+  const s = await chrome.storage.local.get(['baseURL', 'apiKey', 'model', 'visionModel']);
+  const baseURL = (s.baseURL || '').replace(/\/+$/, '');
+  const model = s.visionModel || s.model;
+  if (!baseURL || !model) return { ok: false, needConfig: true };
+  const body = { model, messages: [
+    { role: 'system', content: system },
+    { role: 'user', content: [ { type: 'text', text: user }, { type: 'image_url', image_url: { url: imageDataUrl } } ] },
+  ], max_tokens: 60, stream: false };
+  const headers = { 'Content-Type': 'application/json' };
+  if (s.apiKey) headers['Authorization'] = 'Bearer ' + s.apiKey;
+  try {
+    const r = await fetch(baseURL + '/chat/completions', { method: 'POST', headers, body: JSON.stringify(body) });
+    if (!r.ok) return { ok: false, error: 'HTTP ' + r.status };
+    const data = await r.json();
+    const ch = data && data.choices && data.choices[0];
+    let content = ch && ch.message && ch.message.content;
+    if (Array.isArray(content)) content = content.map((c) => (c && c.text) || '').join('');
+    return { ok: true, text: (content || '').trim() };
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+}
+
+// 海报挑选主流程:候选 → (有 KEY 则逐张让多模态判「是不是该作品海报/封面」)→ 回第一张命中。
+async function handleShelfPoster(msg) {
+  const s = await chrome.storage.local.get(['baseURL', 'model', 'visionModel']);
+  const hasKey = !!(s.baseURL && (s.visionModel || s.model));
+  if (!hasKey) return { ok: false, needConfig: true, error: 'no_model_config' };
+  const typeWord = { book: '书 封面', movie: '电影 海报', anime: '动画 海报', variety: '综艺 海报', music: '专辑 封面', game: '游戏 封面' }[msg.ctype] || '海报';
+  const query = (msg.title || '') + (msg.author ? ' ' + msg.author : '') + ' ' + typeWord;
+  const skip = Number(msg.skip) || 0;
+  const cands = await baiduImageCandidates(query, skip + 4);
+  if (!cands.length) return { ok: false, error: 'no_candidates' };
+  // 从 skip 起逐张判:多模态 yes/no。
+  const system = '你是图片甄别助手。判断给定图片是不是指定作品的海报或封面。只回答「是」或「否」。';
+  for (let i = skip; i < cands.length; i++) {
+    const c = cands[i];
+    const dataUrl = await imageUrlToDataUrl(c.thumb);
+    if (!dataUrl) continue;
+    const user = '作品:「' + (msg.title || '') + (msg.author ? (' / ' + msg.author) : '') + '」。这张图是它的海报/封面吗?';
+    const r = await visionPick(dataUrl, system, user);
+    if (r.needConfig) return { ok: false, needConfig: true };
+    if (r.ok && /^(是|yes|y)/i.test(r.text)) return { ok: true, url: c.url, picked: i };
+    // 判否或调用失败 → 试下一张
+  }
+  // 都没明确命中 → 回 skip 那张兜底(宁可有图,用户可再换)
+  const fb = cands[Math.min(skip, cands.length - 1)];
+  return fb ? { ok: true, url: fb.url, picked: Math.min(skip, cands.length - 1), fallback: true } : { ok: false, error: 'no_image' };
+}

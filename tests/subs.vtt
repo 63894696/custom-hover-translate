@@ -1,0 +1,16 @@
+WEBVTT
+
+00:00.000 --> 00:02.500
+Hello and welcome to this test video.
+
+00:02.500 --> 00:05.000
+This subtitle track verifies the generic TextTrack fallback.
+
+00:05.000 --> 00:08.000
+The quick brown fox jumps over the lazy dog.
+
+00:08.000 --> 00:12.000
+Translation should appear below the original English line.
+
+00:12.000 --> 00:16.000
+If you can read this, the overlay is working correctly.

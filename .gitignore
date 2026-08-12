@@ -25,3 +25,7 @@ npm-debug.log*
 # Misc
 *.swp
 *.bak
+
+# Scratch / E2E artifacts (temporary probes, screenshots, one-off scripts)
+_*
+tests/_*

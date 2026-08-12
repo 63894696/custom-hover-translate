@@ -1,5 +1,30 @@
 # Changelog
 
+## [2026-08-12] / 视频学习:双语字幕 + AI 帧笔记统一入口
+
+### Features
+- **视频学习统一入口(`CT_VSTUDY`)**:悬停视频 → 右上角浮出「✎ 视频学习」按钮(HoverNotes 同款触发)→ 一键同时开 双语字幕 + AI 帧笔记
+- **AI 帧笔记(`CT_VNOTES`)**:定时 canvas 抽帧 → 多模态端点(笔记提示词,与纯翻译分离)→ 右侧笔记面板,每条带时间戳可点击跳回;📷 手动截图;⬇ 导出 Markdown 文件
+- **面板控制条**:字幕单独开关 / 手动截图 / 下载 Markdown,三者独立不干扰
+- **双模并行为核心差异**:HoverNotes 开笔记模式看不到字幕;我们字幕轨(纯翻译)与帧笔记(笔记提示词)并行,笔记 + 外语字幕同屏
+
+### Technical
+- `extension/src/video-notes.js`(新):抽帧(离屏 canvas→jpeg dataURL,最长边 512,跨域 SecurityError 跳过)/ 笔记提示词 / 侧栏 / 时间戳跳转 / Markdown 导出
+- `extension/src/video-study.js`(新):悬浮按钮(悬停视频显示)/ 一键双模 toggle / 面板控制条增强 / Markdown 下载
+- `background.js`:新增 `vision-note` handler —— 帧图 base64 + 笔记提示词 → OpenAI 兼容多模态 `chat/completions`(image_url);`visionModel` 可单独配,缺省复用主 model;不设 temperature(规避推理模型 400);max_tokens 默认 700
+- `manifest.json`:content_scripts 加 `video-notes.js` + `video-study.js`
+- 多模态端点实测(同图对比):Agnes `agnes-2.5-flash` ✅ 推荐 / MiniMax-M3 ✅(需剥 `<think>`)/ Kimi `kimi-k2.5` ✅(temp 强制 1)/ Kimi vision-preview ✅
+- 隐私:帧图仅经用户配置端点,不落盘;笔记存页面,导出由用户触发;密钥存 `chrome.storage.local`
+
+### 验证(实机 E2E,SecBrowser CDP)
+- 三模块注入 ✓ / 悬浮按钮 ✓ / 一键双模(subs+notes 同启)✓ / AI 笔记产出 ✓ / 字幕 overlay 绑定 ✓ / 时间戳跳转 ✓ / Markdown 导出 ✓
+- 截图:`tests/_vstudy_dual.jpg`、`tests/_notes_panel.jpg`
+- 文档:`docs/video-study.md`
+
+### 已知边界
+- 跨域无 CORS 媒体的帧不可读(帧笔记跳过,字幕轨可用)
+- YouTube timedtext pot 服务端拦截仍未解(环境受限),通用 TextTrack 与帧笔记不受影响
+
 ## [2026-08-12] / 视频双语字幕 + 图片右键翻译(3f949f8)
 
 ### Features
